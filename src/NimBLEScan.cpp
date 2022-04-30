@@ -35,7 +35,7 @@ NimBLEScan::NimBLEScan() {
     m_scan_params.window             = 0; // The duration of the LE scan. LE_Scan_Window shall be less than or equal to LE_Scan_Interval (units=0.625 msec)
     m_scan_params.limited            = 0; // If set, only discover devices in limited discoverable mode.
     m_scan_params.filter_duplicates  = 0; // If set, the controller ignores all but the first advertisement from each device.
-    m_pAdvertisedDeviceCallbacks     = nullptr;
+    m_pScanCallbacks                 = nullptr;
     m_ignoreResults                  = false;
     m_pTaskData                      = nullptr;
     m_duration                       = BLE_HS_FOREVER; // make sure this is non-zero in the event of a host reset
@@ -55,7 +55,8 @@ NimBLEScan::~NimBLEScan() {
  * @param [in] event The event type for this event.
  * @param [in] param Parameter data for this event.
  */
-/*STATIC*/int NimBLEScan::handleGapEvent(ble_gap_event* event, void* arg) {
+/*STATIC*/
+int NimBLEScan::handleGapEvent(ble_gap_event* event, void* arg) {
     (void)arg;
     NimBLEScan* pScan = NimBLEDevice::getScan();
 
@@ -133,7 +134,7 @@ NimBLEScan::~NimBLEScan() {
             advertisedDevice->setPayload(disc.data, disc.length_data, (isLegacyAdv &&
                                          event_type == BLE_HCI_ADV_RPT_EVTYPE_SCAN_RSP));
 
-            if (pScan->m_pAdvertisedDeviceCallbacks) {
+            if (pScan->m_pScanCallbacks) {
                 // If not active scanning or scan response is not available
                 // or extended advertisement scanning, report the result to the callback now.
                 if(pScan->m_scan_params.passive || !isLegacyAdv ||
@@ -141,12 +142,12 @@ NimBLEScan::~NimBLEScan() {
                    advertisedDevice->getAdvType() != BLE_HCI_ADV_TYPE_ADV_SCAN_IND))
                 {
                     advertisedDevice->m_callbackSent = true;
-                    pScan->m_pAdvertisedDeviceCallbacks->onResult(advertisedDevice);
+                    pScan->m_pScanCallbacks->onResult(advertisedDevice);
 
                 // Otherwise, wait for the scan response so we can report the complete data.
                 } else if (isLegacyAdv && event_type == BLE_HCI_ADV_RPT_EVTYPE_SCAN_RSP) {
                     advertisedDevice->m_callbackSent = true;
-                    pScan->m_pAdvertisedDeviceCallbacks->onResult(advertisedDevice);
+                    pScan->m_pScanCallbacks->onResult(advertisedDevice);
                 }
                 // If not storing results and we have invoked the callback, delete the device.
                 if(pScan->m_maxResults == 0 && advertisedDevice->m_callbackSent) {
@@ -162,10 +163,10 @@ NimBLEScan::~NimBLEScan() {
 
             // If a device advertised with scan reponse available and it was not received
             // the callback would not have been invoked, so do it here.
-            if(pScan->m_pAdvertisedDeviceCallbacks) {
+            if(pScan->m_pScanCallbacks) {
                 for(auto &it : pScan->m_scanResults.m_advertisedDevicesVector) {
                     if(!it->m_callbackSent) {
-                        pScan->m_pAdvertisedDeviceCallbacks->onResult(it);
+                        pScan->m_pScanCallbacks->onResult(it);
                     }
                 }
             }
@@ -174,8 +175,8 @@ NimBLEScan::~NimBLEScan() {
                 pScan->clearResults();
             }
 
-            if (pScan->m_scanCompleteCB != nullptr) {
-                pScan->m_scanCompleteCB(pScan->m_scanResults);
+            if (pScan->m_pScanCallbacks != nullptr) {
+                pScan->m_pScanCallbacks->onScanEnd(pScan->m_scanResults);
             }
 
             if(pScan->m_pTaskData != nullptr) {
@@ -262,11 +263,10 @@ void NimBLEScan::setMaxResults(uint8_t maxResults) {
  * @param [in] pAdvertisedDeviceCallbacks Call backs to be invoked.
  * @param [in] wantDuplicates  True if we wish to be called back with duplicates.  Default is false.
  */
-void NimBLEScan::setAdvertisedDeviceCallbacks(NimBLEAdvertisedDeviceCallbacks* pAdvertisedDeviceCallbacks,
-                                              bool wantDuplicates) {
+void NimBLEScan::setScanCallbacks(NimBLEScanCallbacks* pScanCallbacks, bool wantDuplicates) {
     setDuplicateFilter(!wantDuplicates);
-    m_pAdvertisedDeviceCallbacks = pAdvertisedDeviceCallbacks;
-} // setAdvertisedDeviceCallbacks
+    m_pScanCallbacks = pScanCallbacks;
+} // setScanCallbacks
 
 
 /**
@@ -303,11 +303,9 @@ bool NimBLEScan::isScanning() {
  * @param [in] is_continue Set to true to save previous scan results, false to clear them.
  * @return True if scan started or false if there was an error.
  */
-bool NimBLEScan::start(uint32_t duration, void (*scanCompleteCB)(NimBLEScanResults), bool is_continue) {
+bool NimBLEScan::startAsync(uint32_t duration, bool is_continue) {
     NIMBLE_LOGD(LOG_TAG, ">> start: duration=%" PRIu32, duration);
 
-    // Save the callback to be invoked when the scan completes.
-    m_scanCompleteCB = scanCompleteCB;
     // Save the duration in the case that the host is reset so we can reuse it.
     m_duration = duration;
 
@@ -401,7 +399,7 @@ NimBLEScanResults NimBLEScan::start(uint32_t duration, bool is_continue) {
     ble_task_data_t taskData = {nullptr, cur_task, 0, nullptr};
     m_pTaskData = &taskData;
 
-    if(start(duration, nullptr, is_continue)) {
+    if(startAsync(duration, is_continue)) {
 #ifdef ulTaskNotifyValueClear
         // Clear the task notification value to ensure we block
         ulTaskNotifyValueClear(cur_task, ULONG_MAX);
@@ -431,8 +429,8 @@ bool NimBLEScan::stop() {
         clearResults();
     }
 
-    if (rc != BLE_HS_EALREADY && m_scanCompleteCB != nullptr) {
-        m_scanCompleteCB(m_scanResults);
+    if (rc != BLE_HS_EALREADY && m_pScanCallbacks != nullptr) {
+        m_pScanCallbacks->onScanEnd(m_scanResults);
     }
 
     if(m_pTaskData != nullptr) {
@@ -487,8 +485,8 @@ void NimBLEScan::onHostReset() {
 void NimBLEScan::onHostSync() {
     m_ignoreResults = false;
 
-    if(m_duration == 0 && m_pAdvertisedDeviceCallbacks != nullptr) {
-        start(m_duration, m_scanCompleteCB);
+    if(m_duration == 0 && m_pScanCallbacks != nullptr) {
+        startAsync(0, false);
     }
 }
 
