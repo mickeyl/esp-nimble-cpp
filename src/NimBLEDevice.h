@@ -38,6 +38,12 @@
 #include "NimBLEServer.h"
 #endif
 
+#if defined(CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM)
+//FIXME: Insert preprocessor comparison with > 0 here
+#include "NimBLEL2CAPServer.h"
+#include "NimBLEL2CAPService.h"
+#endif
+
 #include "NimBLEUtils.h"
 #include "NimBLEAddress.h"
 
