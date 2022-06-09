@@ -85,6 +85,8 @@
 #define BLEEddystoneTLM                 NimBLEEddystoneTLM
 #define BLEEddystoneURL                 NimBLEEddystoneURL
 #define BLEConnInfo                     NimBLEConnInfo
+#define BLEL2CapServer                  NimBLEL2CAPServer
+#define BLEL2CapService                 NimBLEL2CAPService
 
 #ifdef CONFIG_BT_NIMBLE_MAX_CONNECTIONS
 #define NIMBLE_MAX_CONNECTIONS          CONFIG_BT_NIMBLE_MAX_CONNECTIONS

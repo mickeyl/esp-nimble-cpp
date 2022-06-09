@@ -21,7 +21,3 @@ NimBLEL2CAPService* NimBLEL2CAPServer::createService(uint16_t psm) {
     return service;    
 }
 
-/* STATIC */
-int NimBLEL2CAPServer::handleL2capEvent(struct ble_l2cap_event *event, void *arg) {
-    return 0;
-}
