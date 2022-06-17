@@ -28,7 +28,14 @@ NimBLEL2CAPService::NimBLEL2CAPService(uint16_t psm) {
         NIMBLE_LOGE(LOG_TAG, "Can't init mbuf pool: %d, %s", rc, NimBLEUtils::returnCodeToString(rc));
         return;
     }
-    NIMBLE_LOGI(LOG_TAG, "L2CAP COC %02X registered w/ L2CAP MTU %i", psm, APP_MTU);
+
+    receiveBuffer = (uint8_t*) malloc(APP_MTU);
+    if (receiveBuffer == NULL) {
+        NIMBLE_LOGE(LOG_TAG, "Can't malloc receive buffer: %d, %s", errno, NimBLEUtils::returnCodeToString(errno));
+    }
+
+    this->psm = psm;
+    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X registered w/ L2CAP MTU %i", this->psm, APP_MTU);
 }
 
 NimBLEL2CAPService::~NimBLEL2CAPService() {
@@ -40,12 +47,12 @@ int NimBLEL2CAPService::handleConnectionEvent(struct ble_l2cap_event* event) {
     channel = event->connect.chan;
     struct ble_l2cap_chan_info info;
     ble_l2cap_get_chan_info(channel, &info);
-    NIMBLE_LOGI(LOG_TAG, "L2CAP COC %02X connected. Our MTU is %i, remote MTU is %i", psm, info.our_l2cap_mtu, info.peer_l2cap_mtu);
+    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X connected. Our MTU is %i, remote MTU is %i", psm, info.our_l2cap_mtu, info.peer_l2cap_mtu);
     return 0;
 }
 
 int NimBLEL2CAPService::handleAcceptEvent(struct ble_l2cap_event* event) {
-    NIMBLE_LOGI(LOG_TAG, "L2CAP COC %02X accept.", psm);
+    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X accept.", psm);
     struct os_mbuf *sdu_rx = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
     assert(sdu_rx != NULL);
     ble_l2cap_recv_ready(event->accept.chan, sdu_rx);
@@ -53,17 +60,35 @@ int NimBLEL2CAPService::handleAcceptEvent(struct ble_l2cap_event* event) {
 }
 
 int NimBLEL2CAPService::handleDataReceivedEvent(struct ble_l2cap_event* event) {
-    NIMBLE_LOGI(LOG_TAG, "L2CAP COC %02X data received.", psm);
+    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X data received.", psm);
+
+    struct os_mbuf* rxd = event->receive.sdu_rx;
+    assert(rxd != NULL);
+
+    int rx_len = (int)OS_MBUF_PKTLEN(rxd);
+    assert(rx_len <= (int)APP_MTU);
+
+    int res = os_mbuf_copydata(rxd, 0, rx_len, receiveBuffer);
+    assert(res == 0);
+
+    printf("Received %5i bytes...\n", rx_len);
+    NIMBLE_LOGD(LOG_TAG, "Received: len %5i", rx_len);
+
+    struct os_mbuf* next = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
+    assert(next != NULL);
+    res = ble_l2cap_recv_ready(channel, next);
+    assert(res == 0);
+
     return 0;
 }
 
 int NimBLEL2CAPService::handleTxUnstalledEvent(struct ble_l2cap_event* event) {
-    NIMBLE_LOGI(LOG_TAG, "L2CAP COC %02X transmit unstalled.", psm);
+    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X transmit unstalled.", psm);
     return 0;
 }
 
 int NimBLEL2CAPService::handleDisconnectionEvent(struct ble_l2cap_event* event) {
-    NIMBLE_LOGI(LOG_TAG, "L2CAP COC %02X disconnected.", psm);
+    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X disconnected.", psm);
     channel = NULL;
     return 0;
 }
@@ -71,7 +96,7 @@ int NimBLEL2CAPService::handleDisconnectionEvent(struct ble_l2cap_event* event) 
 /* STATIC */
 int NimBLEL2CAPService::handleL2capEvent(struct ble_l2cap_event *event, void *arg) {
 
-    NIMBLE_LOGD(LOG_TAG, "Handling l2cap event %d", event->type);
+    NIMBLE_LOGD(LOG_TAG, "handleL2capEvent: handling l2cap event %d", event->type);
     NimBLEL2CAPService* self = reinterpret_cast<NimBLEL2CAPService*>(arg);
 
     int returnValue = 0;

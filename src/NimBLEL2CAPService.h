@@ -37,6 +37,7 @@ protected:
 private:
     uint16_t psm; // protocol service multiplexer
     struct ble_l2cap_chan* channel; // channel handle
+    uint8_t* receiveBuffer;
 
     os_membuf_t _coc_mem[OS_MEMPOOL_SIZE(MBUFCNT, MBUFSIZE)];
     struct os_mempool _coc_mempool;
