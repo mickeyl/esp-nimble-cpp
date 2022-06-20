@@ -41,9 +41,21 @@ NimBLEL2CAPService::NimBLEL2CAPService(uint16_t psm, NimBLEL2CAPServiceCallbacks
     NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X registered w/ L2CAP MTU %i", this->psm, APP_MTU);
 }
 
+void NimBLEL2CAPService::write(std::vector<uint8_t> bytes) {
+
+    auto txd = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
+    auto res = os_mbuf_copyinto(txd, 0, bytes.data(), bytes.size());
+    assert(res == 0);
+    
+    res = ble_l2cap_send(channel, txd);
+    assert(res == 0 || (res == BLE_HS_ESTALLED));
+    printf("Packet sent, res = %d\n", res);
+}
+
 NimBLEL2CAPService::~NimBLEL2CAPService() {
 }
 
+// private
 int NimBLEL2CAPService::handleConnectionEvent(struct ble_l2cap_event* event) {
 
     channel = event->connect.chan;

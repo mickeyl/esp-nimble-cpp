@@ -31,6 +31,8 @@ public:
     NimBLEL2CAPService(uint16_t psm, NimBLEL2CAPServiceCallbacks* callbacks);
     ~NimBLEL2CAPService();
 
+    void write(std::vector<uint8_t> bytes);
+
 protected:
     int handleConnectionEvent(struct ble_l2cap_event *event);
     int handleAcceptEvent(struct ble_l2cap_event *event);
