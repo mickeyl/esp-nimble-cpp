@@ -8,6 +8,7 @@
 #include <vector>
 
 class NimBLEL2CAPService;
+class NimBLEL2CAPServiceCallbacks;
 
 #pragma once
 
@@ -16,7 +17,7 @@ public:
     NimBLEL2CAPServer();
     ~NimBLEL2CAPServer();
 
-    NimBLEL2CAPService* createService(uint16_t psm);
+    NimBLEL2CAPService* createService(uint16_t psm, NimBLEL2CAPServiceCallbacks* callbacks);
 
 private:
     friend class NimBLEL2CAPService;

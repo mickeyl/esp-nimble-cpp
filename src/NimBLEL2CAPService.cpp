@@ -11,7 +11,9 @@
 
 static const char* LOG_TAG = "NimBLEL2CAPService";
 
-NimBLEL2CAPService::NimBLEL2CAPService(uint16_t psm) {
+NimBLEL2CAPService::NimBLEL2CAPService(uint16_t psm, NimBLEL2CAPServiceCallbacks* callbacks) {
+
+    assert(callbacks != NULL);
 
     int rc = ble_l2cap_create_server(psm, APP_MTU, NimBLEL2CAPService::handleL2capEvent, this);
     if (rc != 0) {
@@ -35,11 +37,11 @@ NimBLEL2CAPService::NimBLEL2CAPService(uint16_t psm) {
     }
 
     this->psm = psm;
+    this->callbacks = callbacks;
     NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X registered w/ L2CAP MTU %i", this->psm, APP_MTU);
 }
 
 NimBLEL2CAPService::~NimBLEL2CAPService() {
-
 }
 
 int NimBLEL2CAPService::handleConnectionEvent(struct ble_l2cap_event* event) {
@@ -73,6 +75,9 @@ int NimBLEL2CAPService::handleDataReceivedEvent(struct ble_l2cap_event* event) {
 
     printf("Received %5i bytes...\n", rx_len);
     NIMBLE_LOGD(LOG_TAG, "Received: len %5i", rx_len);
+
+    std::vector<uint8_t> incomingData(receiveBuffer, receiveBuffer + rx_len);
+    callbacks->onRead(this, incomingData);
 
     struct os_mbuf* next = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
     assert(next != NULL);
@@ -129,3 +134,5 @@ int NimBLEL2CAPService::handleL2capEvent(struct ble_l2cap_event *event, void *ar
 
     return returnValue;
 }
+
+NimBLEL2CAPServiceCallbacks::~NimBLEL2CAPServiceCallbacks() {}

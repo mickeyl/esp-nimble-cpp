@@ -13,6 +13,8 @@
 #undef max
 #undef min
 
+#include <vector>
+
 #define APP_MTU 5000
 #define APP_BUF_CHUNKSIZE 500
 #define APP_BUF_NUM 10
@@ -22,9 +24,11 @@
 #define MBUFSIZE            (APP_BUF_CHUNKSIZE + MBUFSIZE_OVHD)
 #define MBUFCNT             (APP_BUF_NUM * MBUFS_PER_MTU)
 
+class NimBLEL2CAPServiceCallbacks;
+
 class NimBLEL2CAPService {
 public:
-    NimBLEL2CAPService(uint16_t psm);
+    NimBLEL2CAPService(uint16_t psm, NimBLEL2CAPServiceCallbacks* callbacks);
     ~NimBLEL2CAPService();
 
 protected:
@@ -39,12 +43,20 @@ private:
     struct ble_l2cap_chan* channel; // channel handle
     uint8_t* receiveBuffer;
 
+    NimBLEL2CAPServiceCallbacks* callbacks;
+
     os_membuf_t _coc_mem[OS_MEMPOOL_SIZE(MBUFCNT, MBUFSIZE)];
     struct os_mempool _coc_mempool;
     struct os_mbuf_pool _coc_mbuf_pool;
 
     static int handleL2capEvent(struct ble_l2cap_event *event, void *arg);
+};
 
+class NimBLEL2CAPServiceCallbacks {
+
+public:
+    virtual      ~NimBLEL2CAPServiceCallbacks();
+    virtual void onRead(NimBLEL2CAPService* pService, std::vector<uint8_t>& data);
 };
 
 #endif

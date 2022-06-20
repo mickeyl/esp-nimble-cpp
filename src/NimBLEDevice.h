@@ -87,6 +87,7 @@
 #define BLEConnInfo                     NimBLEConnInfo
 #define BLEL2CapServer                  NimBLEL2CAPServer
 #define BLEL2CapService                 NimBLEL2CAPService
+#define BLEL2CapServiceCallbacks        NimBLEL2CAPServiceCallbacks
 
 #ifdef CONFIG_BT_NIMBLE_MAX_CONNECTIONS
 #define NIMBLE_MAX_CONNECTIONS          CONFIG_BT_NIMBLE_MAX_CONNECTIONS
