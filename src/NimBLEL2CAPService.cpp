@@ -44,12 +44,14 @@ NimBLEL2CAPService::NimBLEL2CAPService(uint16_t psm, NimBLEL2CAPServiceCallbacks
 void NimBLEL2CAPService::write(std::vector<uint8_t> bytes) {
 
     auto txd = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
+    assert(txd != NULL);
+    //auto res = os_mbuf_append(txd, bytes.data(), bytes.size());
     auto res = os_mbuf_copyinto(txd, 0, bytes.data(), bytes.size());
     assert(res == 0);
-    
+
     res = ble_l2cap_send(channel, txd);
     assert(res == 0 || (res == BLE_HS_ESTALLED));
-    printf("Packet sent, res = %d\n", res);
+    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X %5i bytes sent", this->psm, bytes.size());
 }
 
 NimBLEL2CAPService::~NimBLEL2CAPService() {
@@ -85,14 +87,17 @@ int NimBLEL2CAPService::handleDataReceivedEvent(struct ble_l2cap_event* event) {
     int res = os_mbuf_copydata(rxd, 0, rx_len, receiveBuffer);
     assert(res == 0);
 
-    printf("Received %5i bytes...\n", rx_len);
-    NIMBLE_LOGD(LOG_TAG, "Received: len %5i", rx_len);
+    NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X received %5i bytes.", psm, rx_len);
+
+    res = os_mbuf_free(rxd);
+    assert(res == 0);
 
     std::vector<uint8_t> incomingData(receiveBuffer, receiveBuffer + rx_len);
     callbacks->onRead(this, incomingData);
 
     struct os_mbuf* next = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
     assert(next != NULL);
+
     res = ble_l2cap_recv_ready(channel, next);
     assert(res == 0);
 
