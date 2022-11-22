@@ -14,9 +14,9 @@ NimBLEL2CAPServer::~NimBLEL2CAPServer() {
 
 }
 
-NimBLEL2CAPService* NimBLEL2CAPServer::createService(uint16_t psm, NimBLEL2CAPServiceCallbacks* callbacks) {
+NimBLEL2CAPService* NimBLEL2CAPServer::createService(uint16_t psm, uint16_t mtu, NimBLEL2CAPServiceCallbacks* callbacks) {
 
-    auto service = new NimBLEL2CAPService(psm, callbacks);
+    auto service = new NimBLEL2CAPService(psm, mtu, callbacks);
     this->m_svcVec.push_back(service);
     return service;    
 }

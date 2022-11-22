@@ -9,49 +9,88 @@
 
 #include "nimble/nimble_port.h"
 
+// Round-up integer division
+#define CEIL_DIVIDE(a, b) (((a) + (b) - 1) / (b))
+#define ROUND_DIVIDE(a, b) (((a) + (b) / 2) / (b))
+
 static const char* LOG_TAG = "NimBLEL2CAPService";
 
-NimBLEL2CAPService::NimBLEL2CAPService(uint16_t psm, NimBLEL2CAPServiceCallbacks* callbacks) {
+NimBLEL2CAPService::NimBLEL2CAPService(uint16_t psm, uint16_t mtu, NimBLEL2CAPServiceCallbacks* callbacks) {
 
     assert(callbacks != NULL);
 
-    int rc = ble_l2cap_create_server(psm, APP_MTU, NimBLEL2CAPService::handleL2capEvent, this);
+    const size_t buf_blocks = CEIL_DIVIDE(mtu, L2CAP_BUF_BLOCK_SIZE) * L2CAP_BUF_SIZE_MTUS_PER_CHANNEL;
+    printf("# of buf_blocks: %d\n", buf_blocks);
+
+    int rc = ble_l2cap_create_server(psm, mtu, NimBLEL2CAPService::handleL2capEvent, this);
     if (rc != 0) {
         NIMBLE_LOGE(LOG_TAG, "L2CAP Server creation error: %d, %s", rc, NimBLEUtils::returnCodeToString(rc));
         return;
     }
-    rc = os_mempool_init(&_coc_mempool, MBUFCNT, MBUFSIZE, _coc_mem, "appbuf");
-    if (rc != 0) {
-        NIMBLE_LOGE(LOG_TAG, "Can't init mempool: %d, %s", rc, NimBLEUtils::returnCodeToString(rc));
-        return;
-    }
-    rc = os_mbuf_pool_init(&_coc_mbuf_pool, &_coc_mempool, MBUFSIZE, MBUFCNT);
-    if (rc != 0) {
-        NIMBLE_LOGE(LOG_TAG, "Can't init mbuf pool: %d, %s", rc, NimBLEUtils::returnCodeToString(rc));
+
+    _coc_memory = malloc(OS_MEMPOOL_SIZE(buf_blocks, L2CAP_BUF_BLOCK_SIZE) * sizeof(os_membuf_t));
+    if (_coc_memory == 0) {
+        NIMBLE_LOGE(LOG_TAG, "Can't allocate _coc_memory: %d", errno);
         return;
     }
 
-    receiveBuffer = (uint8_t*) malloc(APP_MTU);
+    rc = os_mempool_init(&_coc_mempool, buf_blocks, L2CAP_BUF_BLOCK_SIZE, _coc_memory, "appbuf");
+    if (rc != 0) {
+        NIMBLE_LOGE(LOG_TAG, "Can't os_mempool_init: %d, %s", rc, NimBLEUtils::returnCodeToString(rc));
+        return;
+    }
+    rc = os_mbuf_pool_init(&_coc_mbuf_pool, &_coc_mempool, L2CAP_BUF_BLOCK_SIZE, buf_blocks);
+    if (rc != 0) {
+        NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_pool_init: %d, %s", rc, NimBLEUtils::returnCodeToString(rc));
+        return;
+    }
+
+    receiveBuffer = (uint8_t*) malloc(mtu);
     if (receiveBuffer == NULL) {
         NIMBLE_LOGE(LOG_TAG, "Can't malloc receive buffer: %d, %s", errno, NimBLEUtils::returnCodeToString(errno));
     }
 
     this->psm = psm;
+    this->mtu = mtu;
     this->callbacks = callbacks;
-    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X registered w/ L2CAP MTU %i", this->psm, APP_MTU);
+    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X registered w/ L2CAP MTU %i", this->psm, this->mtu);
 }
 
 void NimBLEL2CAPService::write(std::vector<uint8_t> bytes) {
 
+    struct ble_l2cap_chan_info info;
+    ble_l2cap_get_chan_info(channel, &info);
+    auto mtu = info.peer_coc_mtu;
+
+    while (!bytes.empty()) {
+        auto txd = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
+        assert(txd != NULL);
+
+        auto chunk = bytes.size() < mtu ? bytes.size() : mtu;
+        auto res = os_mbuf_append(txd, bytes.data(), chunk);
+        //auto res = os_mbuf_copyinto(txd, 0, bytes.data(), chunk);
+        assert(res == 0);
+        res = ble_l2cap_send(channel, txd);
+        assert(res == 0 || (res == BLE_HS_ESTALLED));
+        std::vector<uint8_t>(bytes.begin() + chunk, bytes.end()).swap(bytes);
+        NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X %5i bytes sent", this->psm, chunk);
+    }
+
+    /*
     auto txd = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
     assert(txd != NULL);
-    //auto res = os_mbuf_append(txd, bytes.data(), bytes.size());
-    auto res = os_mbuf_copyinto(txd, 0, bytes.data(), bytes.size());
+    auto res = os_mbuf_append(txd, bytes.data(), bytes.size());
+    //auto res = os_mbuf_copyinto(txd, 0, bytes.data(), bytes.size());
     assert(res == 0);
 
+    printf("Attempting to send %ld bytes... os_mbuf_pktlen(txd) is %ld\n", bytes.size(), OS_MBUF_PKTLEN(txd));
+
     res = ble_l2cap_send(channel, txd);
+    printf("res: %d\n", res);
+    
     assert(res == 0 || (res == BLE_HS_ESTALLED));
     NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X %5i bytes sent", this->psm, bytes.size());
+    */
 }
 
 NimBLEL2CAPService::~NimBLEL2CAPService() {
@@ -82,14 +121,14 @@ int NimBLEL2CAPService::handleDataReceivedEvent(struct ble_l2cap_event* event) {
     assert(rxd != NULL);
 
     int rx_len = (int)OS_MBUF_PKTLEN(rxd);
-    assert(rx_len <= (int)APP_MTU);
+    assert(rx_len <= (int)mtu);
 
     int res = os_mbuf_copydata(rxd, 0, rx_len, receiveBuffer);
     assert(res == 0);
 
-    NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X received %5i bytes.", psm, rx_len);
+    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X received %5i bytes.", psm, rx_len);
 
-    res = os_mbuf_free(rxd);
+    res = os_mbuf_free_chain(rxd);
     assert(res == 0);
 
     std::vector<uint8_t> incomingData(receiveBuffer, receiveBuffer + rx_len);

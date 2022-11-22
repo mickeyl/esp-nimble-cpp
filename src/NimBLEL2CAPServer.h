@@ -17,7 +17,7 @@ public:
     NimBLEL2CAPServer();
     ~NimBLEL2CAPServer();
 
-    NimBLEL2CAPService* createService(uint16_t psm, NimBLEL2CAPServiceCallbacks* callbacks);
+    NimBLEL2CAPService* createService(uint16_t psm, uint16_t mtu, NimBLEL2CAPServiceCallbacks* callbacks);
 
 private:
     friend class NimBLEL2CAPService;
