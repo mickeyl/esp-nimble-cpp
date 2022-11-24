@@ -75,22 +75,6 @@ void NimBLEL2CAPService::write(std::vector<uint8_t> bytes) {
         std::vector<uint8_t>(bytes.begin() + chunk, bytes.end()).swap(bytes);
         NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X %5i bytes sent", this->psm, chunk);
     }
-
-    /*
-    auto txd = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
-    assert(txd != NULL);
-    auto res = os_mbuf_append(txd, bytes.data(), bytes.size());
-    //auto res = os_mbuf_copyinto(txd, 0, bytes.data(), bytes.size());
-    assert(res == 0);
-
-    printf("Attempting to send %ld bytes... os_mbuf_pktlen(txd) is %ld\n", bytes.size(), OS_MBUF_PKTLEN(txd));
-
-    res = ble_l2cap_send(channel, txd);
-    printf("res: %d\n", res);
-    
-    assert(res == 0 || (res == BLE_HS_ESTALLED));
-    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X %5i bytes sent", this->psm, bytes.size());
-    */
 }
 
 NimBLEL2CAPService::~NimBLEL2CAPService() {
@@ -103,6 +87,7 @@ int NimBLEL2CAPService::handleConnectionEvent(struct ble_l2cap_event* event) {
     struct ble_l2cap_chan_info info;
     ble_l2cap_get_chan_info(channel, &info);
     NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X connected. Our MTU is %i, remote MTU is %i", psm, info.our_l2cap_mtu, info.peer_l2cap_mtu);
+    callbacks->onConnect(this);
     return 0;
 }
 
@@ -151,6 +136,7 @@ int NimBLEL2CAPService::handleTxUnstalledEvent(struct ble_l2cap_event* event) {
 int NimBLEL2CAPService::handleDisconnectionEvent(struct ble_l2cap_event* event) {
     NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X disconnected.", psm);
     channel = NULL;
+    callbacks->onDisconnect(this);
     return 0;
 }
 
