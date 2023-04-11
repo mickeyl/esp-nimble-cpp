@@ -73,7 +73,7 @@ void NimBLEL2CAPService::write(std::vector<uint8_t> bytes) {
         res = ble_l2cap_send(channel, txd);
         assert(res == 0 || (res == BLE_HS_ESTALLED));
         std::vector<uint8_t>(bytes.begin() + chunk, bytes.end()).swap(bytes);
-        NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X %5i bytes sent", this->psm, chunk);
+        NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X sent %d bytes.", this->psm, chunk);
     }
 }
 
@@ -86,7 +86,7 @@ int NimBLEL2CAPService::handleConnectionEvent(struct ble_l2cap_event* event) {
     channel = event->connect.chan;
     struct ble_l2cap_chan_info info;
     ble_l2cap_get_chan_info(channel, &info);
-    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X connected. Our MTU is %i, remote MTU is %i", psm, info.our_l2cap_mtu, info.peer_l2cap_mtu);
+    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X connected. Our MTU is %i, remote MTU is %i.", psm, info.our_l2cap_mtu, info.peer_l2cap_mtu);
     callbacks->onConnect(this);
     return 0;
 }
@@ -111,7 +111,7 @@ int NimBLEL2CAPService::handleDataReceivedEvent(struct ble_l2cap_event* event) {
     int res = os_mbuf_copydata(rxd, 0, rx_len, receiveBuffer);
     assert(res == 0);
 
-    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X received %5i bytes.", psm, rx_len);
+    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X received %d bytes.", psm, rx_len);
 
     res = os_mbuf_free_chain(rxd);
     assert(res == 0);
