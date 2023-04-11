@@ -56,7 +56,7 @@ NimBLEL2CAPService::NimBLEL2CAPService(uint16_t psm, uint16_t mtu, NimBLEL2CAPSe
     NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X registered w/ L2CAP MTU %i", this->psm, this->mtu);
 }
 
-void NimBLEL2CAPService::write(std::vector<uint8_t> bytes) {
+void NimBLEL2CAPService::write(std::vector<uint8_t>& bytes) {
 
     struct ble_l2cap_chan_info info;
     ble_l2cap_get_chan_info(channel, &info);
