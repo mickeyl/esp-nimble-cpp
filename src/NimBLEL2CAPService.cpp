@@ -100,7 +100,7 @@ int NimBLEL2CAPService::handleAcceptEvent(struct ble_l2cap_event* event) {
 }
 
 int NimBLEL2CAPService::handleDataReceivedEvent(struct ble_l2cap_event* event) {
-    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X data received.", psm);
+    NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X data received.", psm);
 
     struct os_mbuf* rxd = event->receive.sdu_rx;
     assert(rxd != NULL);
@@ -111,7 +111,7 @@ int NimBLEL2CAPService::handleDataReceivedEvent(struct ble_l2cap_event* event) {
     int res = os_mbuf_copydata(rxd, 0, rx_len, receiveBuffer);
     assert(res == 0);
 
-    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X received %d bytes.", psm, rx_len);
+    NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X received %d bytes.", psm, rx_len);
 
     res = os_mbuf_free_chain(rxd);
     assert(res == 0);
