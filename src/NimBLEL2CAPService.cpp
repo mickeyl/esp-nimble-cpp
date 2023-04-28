@@ -73,7 +73,7 @@ void NimBLEL2CAPService::write(std::vector<uint8_t>& bytes) {
         res = ble_l2cap_send(channel, txd);
         assert(res == 0 || (res == BLE_HS_ESTALLED));
         std::vector<uint8_t>(bytes.begin() + chunk, bytes.end()).swap(bytes);
-        NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X sent %d bytes.", this->psm, chunk);
+        NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X sent %d bytes.", this->psm, chunk);
     }
 }
 
