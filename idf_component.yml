@@ -1,0 +1,6 @@
+version: "1.5.0"
+description: C++ library for the esp32 NimBLE stack
+url: https://github.com/mickeyl/esp-nimble-cpp
+dependencies:
+  idf: ">=5.0"
+  
