@@ -25,7 +25,7 @@ public:
     NimBLEL2CAPService(uint16_t psm, uint16_t mtu, NimBLEL2CAPServiceCallbacks* callbacks);
     ~NimBLEL2CAPService();
 
-    void write(std::vector<uint8_t>& bytes);
+    bool write(const std::vector<uint8_t>& bytes);
 
 protected:
     int handleConnectionEvent(struct ble_l2cap_event *event);

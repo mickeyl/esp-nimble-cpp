@@ -56,25 +56,31 @@ NimBLEL2CAPService::NimBLEL2CAPService(uint16_t psm, uint16_t mtu, NimBLEL2CAPSe
     NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X registered w/ L2CAP MTU %i", this->psm, this->mtu);
 }
 
-void NimBLEL2CAPService::write(std::vector<uint8_t>& bytes) {
-
+bool NimBLEL2CAPService::write(const std::vector<uint8_t>& bytes) {
     struct ble_l2cap_chan_info info;
     ble_l2cap_get_chan_info(channel, &info);
     auto mtu = info.peer_coc_mtu;
 
-    while (!bytes.empty()) {
+    auto it = bytes.begin();
+    while (it != bytes.end()) {
         auto txd = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
-        assert(txd != NULL);
-
-        auto chunk = bytes.size() < mtu ? bytes.size() : mtu;
-        auto res = os_mbuf_append(txd, bytes.data(), chunk);
-        //auto res = os_mbuf_copyinto(txd, 0, bytes.data(), chunk);
-        assert(res == 0);
-        res = ble_l2cap_send(channel, txd);
-        assert(res == 0 || (res == BLE_HS_ESTALLED));
-        std::vector<uint8_t>(bytes.begin() + chunk, bytes.end()).swap(bytes);
+        if (!txd) {
+            NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_get_pkthdr.");
+            return false;
+        }
+        auto chunk = std::min(static_cast<size_t>(std::distance(it, bytes.end())), static_cast<size_t>(mtu));
+        if (auto res = os_mbuf_append(txd, &(*it), chunk); res != 0) {
+            NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_append: %d", res);
+            return false;
+        }
+        if (auto res = ble_l2cap_send(channel, txd); res != 0 && res != BLE_HS_ESTALLED) {
+            NIMBLE_LOGE(LOG_TAG, "Can't ble_l2cap_send: %d", res);
+            return false;
+        }
+        it += chunk;
         NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X sent %d bytes.", this->psm, chunk);
     }
+    return true;
 }
 
 NimBLEL2CAPService::~NimBLEL2CAPService() {
