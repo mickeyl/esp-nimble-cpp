@@ -17,10 +17,10 @@ static const char* LOG_TAG = "NimBLEL2CAPService";
 
 NimBLEL2CAPService::NimBLEL2CAPService(uint16_t psm, uint16_t mtu, NimBLEL2CAPServiceCallbacks* callbacks) {
 
-    assert(callbacks != NULL);
+    assert(callbacks != NULL); // fail here, if no callbacks are given
 
     const size_t buf_blocks = CEIL_DIVIDE(mtu, L2CAP_BUF_BLOCK_SIZE) * L2CAP_BUF_SIZE_MTUS_PER_CHANNEL;
-    printf("# of buf_blocks: %d\n", buf_blocks);
+    NIMBLE_LOGD(LOG_TAG, "Computed number of buf_blocks = %d", buf_blocks);
 
     int rc = ble_l2cap_create_server(psm, mtu, NimBLEL2CAPService::handleL2capEvent, this);
     if (rc != 0) {
@@ -36,18 +36,18 @@ NimBLEL2CAPService::NimBLEL2CAPService(uint16_t psm, uint16_t mtu, NimBLEL2CAPSe
 
     rc = os_mempool_init(&_coc_mempool, buf_blocks, L2CAP_BUF_BLOCK_SIZE, _coc_memory, "appbuf");
     if (rc != 0) {
-        NIMBLE_LOGE(LOG_TAG, "Can't os_mempool_init: %d, %s", rc, NimBLEUtils::returnCodeToString(rc));
+        NIMBLE_LOGE(LOG_TAG, "Can't os_mempool_init: %d", rc);
         return;
     }
     rc = os_mbuf_pool_init(&_coc_mbuf_pool, &_coc_mempool, L2CAP_BUF_BLOCK_SIZE, buf_blocks);
     if (rc != 0) {
-        NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_pool_init: %d, %s", rc, NimBLEUtils::returnCodeToString(rc));
+        NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_pool_init: %d", rc);
         return;
     }
 
     receiveBuffer = (uint8_t*) malloc(mtu);
     if (receiveBuffer == NULL) {
-        NIMBLE_LOGE(LOG_TAG, "Can't malloc receive buffer: %d, %s", errno, NimBLEUtils::returnCodeToString(errno));
+        NIMBLE_LOGE(LOG_TAG, "Can't malloc receive buffer: %d, %s", errno, strerror(errno));
     }
 
     this->psm = psm;
