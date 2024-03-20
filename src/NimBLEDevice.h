@@ -36,13 +36,11 @@
 
 #if defined(CONFIG_BT_NIMBLE_ROLE_PERIPHERAL)
 #include "NimBLEServer.h"
-#endif
-
-#if defined(CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM)
-//FIXME: Insert preprocessor comparison with > 0 here
+#if CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM > 0
 #include "NimBLEL2CAPServer.h"
 #include "NimBLEL2CAPService.h"
-#endif
+#endif // CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM > 0
+#endif // defined(CONFIG_BT_NIMBLE_ROLE_PERIPHERAL)
 
 #include "NimBLEUtils.h"
 #include "NimBLEAddress.h"
@@ -85,9 +83,9 @@
 #define BLEEddystoneTLM                 NimBLEEddystoneTLM
 #define BLEEddystoneURL                 NimBLEEddystoneURL
 #define BLEConnInfo                     NimBLEConnInfo
-#define BLEL2CapServer                  NimBLEL2CAPServer
-#define BLEL2CapService                 NimBLEL2CAPService
-#define BLEL2CapServiceCallbacks        NimBLEL2CAPServiceCallbacks
+#define BLEL2CAPServer                  NimBLEL2CAPServer
+#define BLEL2CAPService                 NimBLEL2CAPService
+#define BLEL2CAPServiceCallbacks        NimBLEL2CAPServiceCallbacks
 
 #ifdef CONFIG_BT_NIMBLE_MAX_CONNECTIONS
 #define NIMBLE_MAX_CONNECTIONS          CONFIG_BT_NIMBLE_MAX_CONNECTIONS
@@ -123,6 +121,13 @@ public:
 #if defined(CONFIG_BT_NIMBLE_ROLE_PERIPHERAL)
     static NimBLEServer*    createServer();
     static NimBLEServer*    getServer();
+#if CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM > 0
+    static NimBLEL2CAPServer* createL2CAPServer();
+    static NimBLEL2CAPServer* getL2CAPServer();
+#endif // CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM > 0
+#endif // CONFIG_BT_NIMBLE_ROLE_PERIPHERAL
+
+#if defined(CONFIG_BT_NIMBLE_ROLE_BROADCASTER)
 #endif
 
 #ifdef ESP_PLATFORM
@@ -218,6 +223,13 @@ private:
 
 #if defined(CONFIG_BT_NIMBLE_ROLE_PERIPHERAL)
     static NimBLEServer*              m_pServer;
+#if CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM > 0
+    static NimBLEL2CAPServer*         m_pL2CAPServer;
+#endif // CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM > 0
+#endif // CONFIG_BT_NIMBLE_ROLE_PERIPHERAL
+
+#if defined(CONFIG_BT_NIMBLE_ROLE_BROADCASTER)
+    static NimBLEAdvertising*        m_pAdvertising;
 #endif
 
 #if defined(CONFIG_BT_NIMBLE_ROLE_BROADCASTER)

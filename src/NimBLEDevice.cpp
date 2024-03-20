@@ -65,7 +65,10 @@ NimBLEScan*     NimBLEDevice::m_pScan = nullptr;
 #endif
 #if defined(CONFIG_BT_NIMBLE_ROLE_PERIPHERAL)
 NimBLEServer*   NimBLEDevice::m_pServer = nullptr;
-#endif
+#if CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM > 0
+NimBLEL2CAPServer* NimBLEDevice::m_pL2CAPServer = nullptr;
+#endif // CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM > 0
+#endif // CONFIG_BT_NIMBLE_ROLE_PERIPHERAL
 uint32_t        NimBLEDevice::m_passkey = 123456;
 bool            NimBLEDevice::m_synced = false;
 #if defined(CONFIG_BT_NIMBLE_ROLE_BROADCASTER)
@@ -105,7 +108,6 @@ uint8_t                     NimBLEDevice::m_scanFilterMode = CONFIG_BTDM_SCAN_DU
     return m_pServer;
 } // createServer
 
-
 /**
  * @brief Get the instance of the server.
  * @return A pointer to the server instance.
@@ -113,6 +115,30 @@ uint8_t                     NimBLEDevice::m_scanFilterMode = CONFIG_BTDM_SCAN_DU
 /* STATIC */ NimBLEServer* NimBLEDevice::getServer() {
     return m_pServer;
 } // getServer
+
+/**
+ * @brief Create a new instance of an L2CAP server.
+ * @return A new instance of the L2CAP server.
+ */
+#if CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM > 0
+/* STATIC */ NimBLEL2CAPServer* NimBLEDevice::createL2CAPServer() {
+    if(NimBLEDevice::m_pL2CAPServer == nullptr) {
+        NimBLEDevice::m_pL2CAPServer = new NimBLEL2CAPServer();
+    }
+    return m_pL2CAPServer;
+} // createL2CAPServer
+
+/**
+ * @brief Get the instance of the L2CAP server.
+ * @return A pointer to the L2CAP server instance.
+ */
+/* STATIC */ NimBLEL2CAPServer* NimBLEDevice::getL2CAPServer() {
+    return m_pL2CAPServer;
+} // getL2CAPServer
+#endif // CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM > 0
+
+
+
 #endif // #if defined(CONFIG_BT_NIMBLE_ROLE_PERIPHERAL)
 
 
@@ -943,6 +969,12 @@ void NimBLEDevice::deinit(bool clearAll) {
                 delete NimBLEDevice::m_pServer;
                 NimBLEDevice::m_pServer = nullptr;
             }
+#if CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM > 0
+            if(NimBLEDevice::m_pL2CAPServer != nullptr) {
+                delete NimBLEDevice::m_pL2CAPServer;
+                NimBLEDevice::m_pL2CAPServer = nullptr;
+            }
+#endif // CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM > 0
 #endif
 
 #if defined(CONFIG_BT_NIMBLE_ROLE_BROADCASTER)
