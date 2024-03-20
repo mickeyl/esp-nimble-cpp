@@ -14,13 +14,14 @@ class NimBLEL2CAPServiceCallbacks;
 
 class NimBLEL2CAPServer {
 public:
-    NimBLEL2CAPServer();
-    ~NimBLEL2CAPServer();
 
     NimBLEL2CAPService* createService(const uint16_t psm, const uint16_t mtu, NimBLEL2CAPServiceCallbacks* callbacks);
 
 private:
+    NimBLEL2CAPServer();
+    ~NimBLEL2CAPServer();
     friend class NimBLEL2CAPService;
+    friend class NimBLEDevice;
     std::vector<NimBLEL2CAPService*> m_svcVec;
 };
 
