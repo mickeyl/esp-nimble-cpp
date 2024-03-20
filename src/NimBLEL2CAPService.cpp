@@ -84,6 +84,13 @@ bool NimBLEL2CAPService::write(const std::vector<uint8_t>& bytes) {
 }
 
 NimBLEL2CAPService::~NimBLEL2CAPService() {
+
+    if (this->callbacks) { delete this->callbacks; }
+    if (this->receiveBuffer) { free(this->receiveBuffer); }
+    if (_coc_memory) { free(_coc_memory); }
+    //FIXME: How to destroy the server? There is no API for that!?
+    //ble_l2cap_destroy_server(channel);
+    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X shutdown and freed", this->psm);
 }
 
 // private
