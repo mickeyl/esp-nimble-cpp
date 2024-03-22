@@ -90,7 +90,7 @@ NimBLEL2CAPService::~NimBLEL2CAPService() {
     if (_coc_memory) { free(_coc_memory); }
     //FIXME: How to destroy the server? There is no API for that!?
     //ble_l2cap_destroy_server(channel);
-    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X shutdown and freed", this->psm);
+    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X shutdown and freed.", this->psm);
 }
 
 // private
@@ -106,6 +106,11 @@ int NimBLEL2CAPService::handleConnectionEvent(struct ble_l2cap_event* event) {
 
 int NimBLEL2CAPService::handleAcceptEvent(struct ble_l2cap_event* event) {
     NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X accept.", psm);
+    if (!callbacks->shouldAcceptConnection(this)) {
+        NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X refused by delegate.", psm);
+        return -1;
+    }
+
     struct os_mbuf *sdu_rx = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
     assert(sdu_rx != NULL);
     ble_l2cap_recv_ready(event->accept.chan, sdu_rx);

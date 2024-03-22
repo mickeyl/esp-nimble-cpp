@@ -53,6 +53,7 @@ class NimBLEL2CAPServiceCallbacks {
 
 public:
     virtual      ~NimBLEL2CAPServiceCallbacks();
+    virtual bool shouldAcceptConnection(NimBLEL2CAPService* pService) = 0;
     virtual void onConnect(NimBLEL2CAPService* pService) = 0;
     virtual void onRead(NimBLEL2CAPService* pService, std::vector<uint8_t>& data) = 0;
     virtual void onDisconnect(NimBLEL2CAPService* pService) = 0;
