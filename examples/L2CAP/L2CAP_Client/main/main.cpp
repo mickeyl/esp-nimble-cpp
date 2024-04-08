@@ -12,6 +12,11 @@ static BLEUUID    charUUID("371a55c8-f251-4ad2-90b3-c7c195b049be");
 #define L2CAP_MTU            5000
 
 BLEAdvertisedDevice* theDevice = NULL;
+BLEClient* theClient = NULL;
+BLEL2CAPClient* theL2CAPClient = NULL;
+
+size_t bytesSent = 0;
+size_t bytesReceived = 0;
 
 class L2CAPClientCallbacks: public BLEL2CAPClientCallbacks {
 
@@ -38,8 +43,8 @@ class MyClientCallbacks: public BLEClientCallbacks {
         printf("GAP connected\n");
 
         auto callbacks = new L2CAPClientCallbacks();
-        auto l2capClient = BLEL2CAPClient::createClient(L2CAP_CHANNEL, L2CAP_MTU, callbacks);
-        l2capClient->connect(pclient);
+        theL2CAPClient = BLEL2CAPClient::createClient(L2CAP_CHANNEL, L2CAP_MTU, callbacks);
+        theL2CAPClient->connect(pclient);
     }
 
     void onDisconnect(BLEClient* pclient, int reason) {
@@ -66,21 +71,45 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
 void connectTask(void *pvParameters) {
 
     while (true) {
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-
-        if (!theDevice) { continue; }
-
-        auto client = BLEDevice::createClient();
-        auto callbacks = new MyClientCallbacks();
-        client->setClientCallbacks(callbacks);
-
-        auto success = client->connect(theDevice);
-        if (!success) {
-            printf("Error: Could not connect to device\n");
-        } else {
-            theDevice = nullptr;
+        
+        if (!theDevice) {
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            continue;
         }
 
+        if (!theClient) {
+            theClient = BLEDevice::createClient();
+            auto callbacks = new MyClientCallbacks();
+            theClient->setClientCallbacks(callbacks);
+
+            auto success = theClient->connect(theDevice);
+            if (!success) {
+                printf("Error: Could not connect to device\n");
+                break;
+            }
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            continue;            
+        }
+
+        if (!theL2CAPClient) {
+            printf("l2cap client not initialized\n");
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            continue;
+        }
+
+        if (!theL2CAPClient->isConnected()) {
+            printf("l2cap client not connected\n");
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            continue;
+        }
+
+        std::vector<uint8_t> data(5000, 0);
+        if (theL2CAPClient->write(data)) {
+            bytesSent += data.size();
+        } else {
+            printf("failed to send!\n");
+        }
+        vTaskDelay(1);
     }
 }
 
@@ -100,7 +129,15 @@ void app_main(void) {
     scan->setActiveScan(true);
     scan->start(5 * 1000, false);
 
+    int numberOfSeconds = 0;
+
+    while (bytesSent == 0) {
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
+
     while (true) {
         vTaskDelay(1000 / portTICK_PERIOD_MS);
+        int bytesSentPerSeconds = bytesSent / ++numberOfSeconds;
+        printf("Bandwidth: %d bytes per second (%d kbps)\n", bytesSentPerSeconds, bytesSentPerSeconds / 1024);
     }
 }
