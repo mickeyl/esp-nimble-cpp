@@ -32,7 +32,10 @@
 
 #if defined(CONFIG_BT_NIMBLE_ROLE_CENTRAL)
 #include "NimBLEClient.h"
-#endif
+#if CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM > 0
+#include "NimBLEL2CAPClient.h"
+#endif // CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM > 0
+#endif // CONFIG_BT_NIMBLE_ROLE_CENTRAL
 
 #if defined(CONFIG_BT_NIMBLE_ROLE_PERIPHERAL)
 #include "NimBLEServer.h"
@@ -40,7 +43,7 @@
 #include "NimBLEL2CAPServer.h"
 #include "NimBLEL2CAPService.h"
 #endif // CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM > 0
-#endif // defined(CONFIG_BT_NIMBLE_ROLE_PERIPHERAL)
+#endif // CONFIG_BT_NIMBLE_ROLE_PERIPHERAL
 
 #include "NimBLEUtils.h"
 #include "NimBLEAddress.h"
@@ -86,6 +89,8 @@
 #define BLEL2CAPServer                  NimBLEL2CAPServer
 #define BLEL2CAPService                 NimBLEL2CAPService
 #define BLEL2CAPServiceCallbacks        NimBLEL2CAPServiceCallbacks
+#define BLEL2CAPClient                  NimBLEL2CAPClient
+#define BLEL2CAPClientCallbacks         NimBLEL2CAPClientCallbacks
 
 #ifdef CONFIG_BT_NIMBLE_MAX_CONNECTIONS
 #define NIMBLE_MAX_CONNECTIONS          CONFIG_BT_NIMBLE_MAX_CONNECTIONS
