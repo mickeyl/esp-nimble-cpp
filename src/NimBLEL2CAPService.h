@@ -35,6 +35,8 @@ protected:
     int handleDisconnectionEvent(struct ble_l2cap_event *event);
 
 private:
+    static constexpr const char* LOG_TAG = "NimBLEL2CAPService";
+
     uint16_t psm; // protocol service multiplexer
     uint16_t mtu; // maximum transmission unit
     struct ble_l2cap_chan* channel; // channel handle

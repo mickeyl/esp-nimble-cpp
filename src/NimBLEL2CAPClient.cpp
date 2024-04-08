@@ -63,6 +63,44 @@ bool NimBLEL2CAPClient::connect(NimBLEClient* pClient) {
     return rc;
 }
 
+bool NimBLEL2CAPClient::write(const std::vector<uint8_t>& data) {
+
+    if (!isConnected()) { return false; }
+
+    auto connectionHandle = ble_l2cap_get_conn_handle(this->channel);
+    if (!connectionHandle) { return false; }
+
+    struct ble_l2cap_chan_info info;
+    if (ble_l2cap_get_chan_info(this->channel, &info) < 0) { return false; }
+    size_t mtu = this->mtu;
+
+    auto sdu_tx = os_mbuf_get_pkthdr(&this->coc_mbuf_pool, 0);
+    if (!sdu_tx) {
+        NIMBLE_LOGE(LOG_TAG, "os_mbuf_get_pkthdr failed");
+        return false;
+    }
+
+    auto iter = data.begin();
+    while (iter != data.end()) {
+        auto chunk = std::min(static_cast<size_t>(std::distance(iter, data.end())), mtu);
+        if (auto res = os_mbuf_append(sdu_tx, &(*iter), chunk); res != 0) {
+            NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_append: %d", res);
+            return false;
+        }
+        int res = 0;
+        do {
+            res = ble_l2cap_send(channel, sdu_tx);
+            if (res == BLE_HS_ENOMEM) {
+                // we don't have enough space in the TX buffer, try again after a short delay
+                vTaskDelay(10 / portTICK_PERIOD_MS);
+            }
+        } while (res != 0 && res != BLE_HS_ESTALLED && res != BLE_HS_ENOMEM);
+        iter += chunk;
+        NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X sent %d bytes.", this->psm, chunk);
+    }
+    return true;
+}
+
 int NimBLEL2CAPClient::handleConnectionEvent(struct ble_l2cap_event* event) {
 
     this->channel = event->connect.chan;

@@ -23,6 +23,8 @@ public:
 
     static NimBLEL2CAPClient* createClient(const uint16_t psm, const uint16_t mtu, NimBLEL2CAPClientCallbacks* callbacks);
     bool connect(NimBLEClient* pClient);
+    bool isConnected() { return channel != nullptr; }
+    bool write(const std::vector<uint8_t>& data);
 
 private:
     NimBLEL2CAPClient(const uint16_t psm, const uint16_t mtu, NimBLEL2CAPClientCallbacks* callbacks);
@@ -34,6 +36,7 @@ private:
 
     static int handleL2capEvent(struct ble_l2cap_event *event, void *arg);
 
+
 private:
     static constexpr const char* LOG_TAG = "NimBLEL2CAPClient";
     void* coc_memory;
@@ -42,7 +45,7 @@ private:
 
     const uint16_t psm;
     const uint16_t mtu;
-    struct ble_l2cap_chan* channel; // channel handle
+    struct ble_l2cap_chan* channel = nullptr; // channel handle
     uint8_t* receiveBuffer; // MTU buffer
 
     NimBLEL2CAPClientCallbacks* callbacks;

@@ -13,7 +13,6 @@
 #define CEIL_DIVIDE(a, b) (((a) + (b) - 1) / (b))
 #define ROUND_DIVIDE(a, b) (((a) + (b) / 2) / (b))
 
-static const char* LOG_TAG = "NimBLEL2CAPService";
 
 NimBLEL2CAPService::NimBLEL2CAPService(uint16_t psm, uint16_t mtu, NimBLEL2CAPServiceCallbacks* callbacks) {
 
