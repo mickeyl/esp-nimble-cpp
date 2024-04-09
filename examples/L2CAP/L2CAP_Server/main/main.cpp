@@ -8,45 +8,67 @@
 #define L2CAP_CHANNEL        150
 #define L2CAP_MTU            5000
 
-class L2CAPServiceCallbacks: public BLEL2CAPServiceCallbacks {
+class L2CAPChannelCallbacks: public BLEL2CAPChannelCallbacks {
 
 public:
-    bool shouldAcceptConnection(NimBLEL2CAPService* pService) { return true; }
-    void onConnect(NimBLEL2CAPService* pService) {
+    size_t numberOfReceivedBytes;
+    size_t nextSequenceNumber;
+
+public:
+    void onConnect(NimBLEL2CAPChannel* channel) {
         printf("L2CAP connection established\n");
+        numberOfReceivedBytes = nextSequenceNumber = 0;
     }
 
-    void onRead(NimBLEL2CAPService* pService, std::vector<uint8_t>& data) {
-        printf("L2CAP read %d bytes", data.size());
+    void onRead(NimBLEL2CAPChannel* channel, std::vector<uint8_t>& data) {
+        numberOfReceivedBytes += data.size();
+        size_t sequenceNumber = data[0];
+        printf("L2CAP read %d bytes w/ sequence number %d", data.size(), sequenceNumber);
+        if (sequenceNumber != nextSequenceNumber) {
+            printf("(wrong sequence number %d, expected %d)\n", sequenceNumber, nextSequenceNumber);
+        } else {
+            printf("\n");
+            nextSequenceNumber++;
+        }
     }
-    void onDisconnect(NimBLEL2CAPService* pService) {
+    void onDisconnect(NimBLEL2CAPChannel* channel) {
         printf("L2CAP disconnected\n");
     }
 };
 
 extern "C"
 void app_main(void) {
-      printf("Starting L2CAP server example\n");
+    printf("Starting L2CAP server example [%lu free] [%lu min]\n", esp_get_free_heap_size(), esp_get_minimum_free_heap_size());
 
-      BLEDevice::init("L2CAP-Server");
+    BLEDevice::init("L2CAP-Server");
+    BLEDevice::setMTU(BLE_ATT_MTU_MAX);
 
-      auto cocServer = BLEDevice::createL2CAPServer();
-      auto l2capServiceCallbacks = new L2CAPServiceCallbacks();
-      cocServer->createService(L2CAP_CHANNEL, L2CAP_MTU, l2capServiceCallbacks);
-      
-      auto server = BLEDevice::createServer();
-      auto service = server->createService(SERVICE_UUID);
-      auto characteristic = service->createCharacteristic(CHARACTERISTIC_UUID, NIMBLE_PROPERTY::READ);
-      characteristic->setValue(L2CAP_CHANNEL);
-      service->start();
-      auto advertising = BLEDevice::getAdvertising();
-      advertising->addServiceUUID(SERVICE_UUID);
-      advertising->setScanResponse(true);
+    auto cocServer = BLEDevice::createL2CAPServer();
+    auto l2capChannelCallbacks = new L2CAPChannelCallbacks();
+    auto channel = cocServer->createService(L2CAP_CHANNEL, L2CAP_MTU, l2capChannelCallbacks);
+    
+    auto server = BLEDevice::createServer();
+    auto service = server->createService(SERVICE_UUID);
+    auto characteristic = service->createCharacteristic(CHARACTERISTIC_UUID, NIMBLE_PROPERTY::READ);
+    characteristic->setValue(L2CAP_CHANNEL);
+    service->start();
+    auto advertising = BLEDevice::getAdvertising();
+    advertising->addServiceUUID(SERVICE_UUID);
+    advertising->setScanResponse(true);
 
-      BLEDevice::startAdvertising();
-      printf("Server ready for connection requests.\n");
+    BLEDevice::startAdvertising();
+    printf("Server waiting for connection requests [%lu free] [%lu min]\n", esp_get_free_heap_size(), esp_get_minimum_free_heap_size());
 
-      while (true) {
-          vTaskDelay(1000 / portTICK_PERIOD_MS);
-      }
+    // Wait until transfer actually starts...
+    while (!l2capChannelCallbacks->numberOfReceivedBytes) {
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
+    printf("\n\n\n");
+    int numberOfSeconds = 0;
+
+    while (true) {
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        int bps = l2capChannelCallbacks->numberOfReceivedBytes / ++numberOfSeconds;
+        printf("Bandwidth: %d b/sec = %d KB/sec [%lu free] [%lu min]\n", bps, bps / 1024, esp_get_free_heap_size(), esp_get_minimum_free_heap_size());
+    }
 }

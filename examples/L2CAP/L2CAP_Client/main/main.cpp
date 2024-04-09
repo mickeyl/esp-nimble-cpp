@@ -13,41 +13,41 @@ static BLEUUID    charUUID("371a55c8-f251-4ad2-90b3-c7c195b049be");
 
 BLEAdvertisedDevice* theDevice = NULL;
 BLEClient* theClient = NULL;
-BLEL2CAPClient* theL2CAPClient = NULL;
+BLEL2CAPChannel* theChannel = NULL;
 
 size_t bytesSent = 0;
 size_t bytesReceived = 0;
 
-class L2CAPClientCallbacks: public BLEL2CAPClientCallbacks {
+class L2CAPChannelCallbacks: public BLEL2CAPChannelCallbacks {
 
 public:
-    void onConnect(NimBLEL2CAPClient* pClient) {
+    void onConnect(NimBLEL2CAPChannel* channel) {
         printf("L2CAP connection established\n");
     }
 
-    void onMTUChange(NimBLEL2CAPClient* pClient, uint16_t mtu) {
+    void onMTUChange(NimBLEL2CAPChannel* channel, uint16_t mtu) {
         printf("L2CAP MTU changed to %d\n", mtu);
     }
 
-    void onRead(NimBLEL2CAPClient* pClient, std::vector<uint8_t>& data) {
-        printf("L2CAP read %d bytes", data.size());
+    void onRead(NimBLEL2CAPChannel* channel, std::vector<uint8_t>& data) {
+        printf("L2CAP read %d bytes\n", data.size());
     }
-    void onDisconnect(NimBLEL2CAPClient* pClient) {
+    void onDisconnect(NimBLEL2CAPChannel* channel) {
         printf("L2CAP disconnected\n");
     }
 };
 
 class MyClientCallbacks: public BLEClientCallbacks {
 
-    void onConnect(BLEClient* pclient) {
+    void onConnect(BLEClient* pClient) {
         printf("GAP connected\n");
 
-        auto callbacks = new L2CAPClientCallbacks();
-        theL2CAPClient = BLEL2CAPClient::createClient(L2CAP_CHANNEL, L2CAP_MTU, callbacks);
-        theL2CAPClient->connect(pclient);
+        pClient->setConnectionParams(6, 6, 0, 15);
+
+        theChannel = BLEL2CAPChannel::connect(pClient, L2CAP_CHANNEL, L2CAP_MTU, new L2CAPChannelCallbacks());
     }
 
-    void onDisconnect(BLEClient* pclient, int reason) {
+    void onDisconnect(BLEClient* pClient, int reason) {
         printf("GAP disconnected (reason: %d)\n", reason);
     }
 };
@@ -70,6 +70,8 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
 
 void connectTask(void *pvParameters) {
 
+    size_t sequenceNumber = 0;
+
     while (true) {
         
         if (!theDevice) {
@@ -91,25 +93,39 @@ void connectTask(void *pvParameters) {
             continue;            
         }
 
-        if (!theL2CAPClient) {
-            printf("l2cap client not initialized\n");
+        if (!theChannel) {
+            printf("l2cap channel not initialized\n");
             vTaskDelay(1000 / portTICK_PERIOD_MS);
             continue;
         }
 
-        if (!theL2CAPClient->isConnected()) {
-            printf("l2cap client not connected\n");
+        if (!theChannel->isConnected()) {
+            printf("l2cap channel not connected\n");
             vTaskDelay(1000 / portTICK_PERIOD_MS);
             continue;
         }
 
-        std::vector<uint8_t> data(5000, 0);
-        if (theL2CAPClient->write(data)) {
-            bytesSent += data.size();
-        } else {
-            printf("failed to send!\n");
+            std::vector<uint8_t> data(5000, sequenceNumber++);
+            if (theChannel->write(data)) {
+                bytesSent += data.size();
+            } else {
+                printf("failed to send!\n");
+            }
+
+
+        /*
+
+        for (int i = 0; i < 10; ++i) {
+            std::vector<uint8_t> data(1024, sequenceNumber++);
+            if (theChannel->write(data)) {
+                bytesSent += data.size();
+            } else {
+                printf("failed to send!\n");
+            }
         }
-        vTaskDelay(1);
+
+        */
+        vTaskDelay(10000 / portTICK_PERIOD_MS);
     }
 }
 
@@ -120,6 +136,7 @@ void app_main(void) {
     xTaskCreate(connectTask, "connectTask", 5000, NULL, 1, NULL);
 
     BLEDevice::init("L2CAP-Client");
+    BLEDevice::setMTU(BLE_ATT_MTU_MAX);
 
     auto scan = BLEDevice::getScan();
     auto callbacks = new MyAdvertisedDeviceCallbacks();
@@ -138,6 +155,6 @@ void app_main(void) {
     while (true) {
         vTaskDelay(1000 / portTICK_PERIOD_MS);
         int bytesSentPerSeconds = bytesSent / ++numberOfSeconds;
-        printf("Bandwidth: %d bytes per second (%d kbps)\n", bytesSentPerSeconds, bytesSentPerSeconds / 1024);
+        printf("Bandwidth: %d b/sec = %d KB/sec\n", bytesSentPerSeconds, bytesSentPerSeconds / 1024);
     }
 }
