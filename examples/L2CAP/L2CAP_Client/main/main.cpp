@@ -49,6 +49,10 @@ class MyClientCallbacks: public BLEClientCallbacks {
 
     void onDisconnect(BLEClient* pClient, int reason) {
         printf("GAP disconnected (reason: %d)\n", reason);
+        theDevice = NULL;
+        theChannel = NULL;
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        BLEDevice::getScan()->start(5 * 1000, true);
     }
 };
 
@@ -70,7 +74,7 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
 
 void connectTask(void *pvParameters) {
 
-    size_t sequenceNumber = 0;
+    uint8_t sequenceNumber = 0;
 
     while (true) {
         
@@ -89,43 +93,34 @@ void connectTask(void *pvParameters) {
                 printf("Error: Could not connect to device\n");
                 break;
             }
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            vTaskDelay(2000 / portTICK_PERIOD_MS);
             continue;            
         }
 
         if (!theChannel) {
             printf("l2cap channel not initialized\n");
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            vTaskDelay(2000 / portTICK_PERIOD_MS);
             continue;
         }
 
         if (!theChannel->isConnected()) {
             printf("l2cap channel not connected\n");
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            vTaskDelay(2000 / portTICK_PERIOD_MS);
             continue;
         }
+
+        while (theChannel->isConnected()) {
 
             std::vector<uint8_t> data(5000, sequenceNumber++);
             if (theChannel->write(data)) {
                 bytesSent += data.size();
             } else {
                 printf("failed to send!\n");
-            }
-
-
-        /*
-
-        for (int i = 0; i < 10; ++i) {
-            std::vector<uint8_t> data(1024, sequenceNumber++);
-            if (theChannel->write(data)) {
-                bytesSent += data.size();
-            } else {
-                printf("failed to send!\n");
+                abort();                
             }
         }
 
-        */
-        vTaskDelay(10000 / portTICK_PERIOD_MS);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
 

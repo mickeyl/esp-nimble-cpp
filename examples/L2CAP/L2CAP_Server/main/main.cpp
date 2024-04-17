@@ -11,12 +11,14 @@
 class L2CAPChannelCallbacks: public BLEL2CAPChannelCallbacks {
 
 public:
+    bool connected = false;
     size_t numberOfReceivedBytes;
-    size_t nextSequenceNumber;
+    uint8_t nextSequenceNumber;
 
 public:
     void onConnect(NimBLEL2CAPChannel* channel) {
         printf("L2CAP connection established\n");
+        connected = true;
         numberOfReceivedBytes = nextSequenceNumber = 0;
     }
 
@@ -33,6 +35,7 @@ public:
     }
     void onDisconnect(NimBLEL2CAPChannel* channel) {
         printf("L2CAP disconnected\n");
+        connected = false;
     }
 };
 
@@ -68,6 +71,7 @@ void app_main(void) {
 
     while (true) {
         vTaskDelay(1000 / portTICK_PERIOD_MS);
+        if (!l2capChannelCallbacks->connected) { continue; }
         int bps = l2capChannelCallbacks->numberOfReceivedBytes / ++numberOfSeconds;
         printf("Bandwidth: %d b/sec = %d KB/sec [%lu free] [%lu min]\n", bps, bps / 1024, esp_get_free_heap_size(), esp_get_minimum_free_heap_size());
     }
