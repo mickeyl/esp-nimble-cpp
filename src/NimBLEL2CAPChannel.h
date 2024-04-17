@@ -11,6 +11,7 @@
 #include "os/os_mempool.h"
 
 #include <vector>
+#include <atomic>
 
 class NimBLEClient;
 class NimBLEL2CAPChannelCallbacks;
@@ -64,7 +65,6 @@ private:
 
     const uint16_t psm;
     const uint16_t mtu;
-
     struct ble_l2cap_chan* channel = nullptr;
     NimBLEL2CAPChannelCallbacks* callbacks;
     uint8_t* receiveBuffer = nullptr; // buffers a full MTU
@@ -73,6 +73,10 @@ private:
     void* _coc_memory = nullptr;
     struct os_mempool _coc_mempool;
     struct os_mbuf_pool _coc_mbuf_pool;
+
+    // Runtime handling
+    std::atomic<bool> stalled = false;
+    SemaphoreHandle_t stalledSemaphore = nullptr;
 
     // Allocate / deallocate NimBLE memory pool
     bool setupMemPool();

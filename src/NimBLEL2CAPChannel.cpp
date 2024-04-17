@@ -59,6 +59,8 @@ bool NimBLEL2CAPChannel::setupMemPool() {
         return false;
     }
 
+    this->stalledSemaphore = xSemaphoreCreateBinary();
+
     return true;
 }
 
@@ -97,40 +99,50 @@ bool NimBLEL2CAPChannel::write(const std::vector<uint8_t>& bytes) {
         return false;
     }
 
+    auto toSend = bytes.size();
+
+    if (toSend > this->mtu) {
+        return false;
+    }
+
+    if (stalled) {
+        NIMBLE_LOGD(LOG_TAG, "L2CAP Channel waiting for unstall...");
+        xSemaphoreTake(this->stalledSemaphore, portMAX_DELAY);
+        stalled = false;
+        NIMBLE_LOGD(LOG_TAG, "L2CAP Channel unstalled!");
+    }
+
     struct ble_l2cap_chan_info info;
     ble_l2cap_get_chan_info(channel, &info);
     auto mtu = info.peer_coc_mtu;
 
-    auto it = bytes.begin();
-    while (it != bytes.end()) {
-        auto txd = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
-        if (!txd) {
-            NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_get_pkthdr.");
-            return false;
-        }
-        auto chunk = std::min(static_cast<size_t>(std::distance(it, bytes.end())), static_cast<size_t>(mtu));
-        if (auto res = os_mbuf_append(txd, &(*it), chunk); res != 0) {
-            NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_append: %d", res);
-            return false;
-        }
-        auto res = ble_l2cap_send(channel, txd);
-        NIMBLE_LOGD(LOG_TAG, "ble_l2cap_send returned %d", res);
-    
-
-        if (res != 0) { return false; }
-
-        /*
-
-
-        if (auto res = ble_l2cap_send(channel, txd); res != 0 && res != BLE_HS_ESTALLED) {
-            NIMBLE_LOGE(LOG_TAG, "Can't ble_l2cap_send: %d", res);
-            return false;
-        }
-        */
-        it += chunk;
-        NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X sent %d bytes.", this->psm, chunk);
+    auto txd = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
+    if (!txd) {
+        NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_get_pkthdr.");
+        return false;
     }
-    return true;
+    if (auto res = os_mbuf_append(txd, bytes.data(), toSend); res != 0) {
+        NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_append: %d", res);
+        return false;
+    }
+    auto res = ble_l2cap_send(channel, txd);
+    NIMBLE_LOGD(LOG_TAG, "ble_l2cap_send returned %d", res);
+    switch (res) {
+        case BLE_HS_ESTALLED:
+            stalled = true;
+            NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X sent %d bytes.", this->psm, toSend);
+            NIMBLE_LOGW(LOG_TAG, "ble_l2cap_send returned BLE_HS_ESTALLED. Next send will wait for unstalled event...");
+            return true;
+
+        case ESP_OK:
+            NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X sent %d bytes.", this->psm, toSend);
+            return true;
+
+        default:
+            NIMBLE_LOGE(LOG_TAG, "ble_l2cap_send failed: %d", res);
+            return false;
+
+    }
 }
 
 // private
@@ -188,6 +200,7 @@ int NimBLEL2CAPChannel::handleDataReceivedEvent(struct ble_l2cap_event* event) {
 
 int NimBLEL2CAPChannel::handleTxUnstalledEvent(struct ble_l2cap_event* event) {
     NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X transmit unstalled.", psm);
+    xSemaphoreGive(this->stalledSemaphore);
     return 0;
 }
 
