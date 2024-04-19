@@ -8,6 +8,14 @@
 #define L2CAP_CHANNEL        150
 #define L2CAP_MTU            5000
 
+class GATTCallbacks: public BLEServerCallbacks {
+
+public:
+    void onConnect(BLEServer* pServer, BLEConnInfo& info) {
+        pServer->setDataLen(info.getConnHandle(), 251);
+    }
+};
+
 class L2CAPChannelCallbacks: public BLEL2CAPChannelCallbacks {
 
 public:
@@ -20,6 +28,12 @@ public:
         printf("L2CAP connection established\n");
         connected = true;
         numberOfReceivedBytes = nextSequenceNumber = 0;
+
+        /*
+        for (auto connection: BLEDevice::getServer()->getPeerDevices()) {
+            BLEDevice::getServer()->updateConnParams(connection, 6, 20, 0, 1000);
+        }
+        */
     }
 
     void onRead(NimBLEL2CAPChannel* channel, std::vector<uint8_t>& data) {
@@ -51,6 +65,7 @@ void app_main(void) {
     auto channel = cocServer->createService(L2CAP_CHANNEL, L2CAP_MTU, l2capChannelCallbacks);
     
     auto server = BLEDevice::createServer();
+    server->setCallbacks(new GATTCallbacks());
     auto service = server->createService(SERVICE_UUID);
     auto characteristic = service->createCharacteristic(CHARACTERISTIC_UUID, NIMBLE_PROPERTY::READ);
     characteristic->setValue(L2CAP_CHANNEL);

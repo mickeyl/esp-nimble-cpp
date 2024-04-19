@@ -42,7 +42,7 @@ class MyClientCallbacks: public BLEClientCallbacks {
     void onConnect(BLEClient* pClient) {
         printf("GAP connected\n");
 
-        pClient->setConnectionParams(6, 6, 0, 15);
+        //pClient->updateConnParams(6, 6, 0, 42);
 
         theChannel = BLEL2CAPChannel::connect(pClient, L2CAP_CHANNEL, L2CAP_MTU, new L2CAPChannelCallbacks());
     }
@@ -85,6 +85,8 @@ void connectTask(void *pvParameters) {
 
         if (!theClient) {
             theClient = BLEDevice::createClient();
+            theClient->setConnectionParams(6, 6, 0, 42);
+
             auto callbacks = new MyClientCallbacks();
             theClient->setClientCallbacks(callbacks);
 
@@ -111,6 +113,14 @@ void connectTask(void *pvParameters) {
 
         while (theChannel->isConnected()) {
 
+        /*
+            static auto initialDelay = true;
+            if (initialDelay) {
+                printf("Waiting gracefully 3 seconds before sending data\n");
+                vTaskDelay(3000 / portTICK_PERIOD_MS);
+                initialDelay = false;
+            };
+*/
             std::vector<uint8_t> data(5000, sequenceNumber++);
             if (theChannel->write(data)) {
                 bytesSent += data.size();
@@ -139,7 +149,7 @@ void app_main(void) {
     scan->setInterval(1349);
     scan->setWindow(449);
     scan->setActiveScan(true);
-    scan->start(5 * 1000, false);
+    scan->start(25 * 1000, false);
 
     int numberOfSeconds = 0;
 
