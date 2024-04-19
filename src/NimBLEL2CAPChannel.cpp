@@ -16,6 +16,8 @@
 #define CEIL_DIVIDE(a, b) (((a) + (b) - 1) / (b))
 #define ROUND_DIVIDE(a, b) (((a) + (b) / 2) / (b))
 
+constexpr TickType_t RetryTimeout = pdMS_TO_TICKS(50);
+
 NimBLEL2CAPChannel::NimBLEL2CAPChannel(uint16_t psm, uint16_t mtu, NimBLEL2CAPChannelCallbacks* callbacks)
                    :psm(psm), mtu(mtu), callbacks(callbacks) {
 
@@ -23,7 +25,7 @@ NimBLEL2CAPChannel::NimBLEL2CAPChannel(uint16_t psm, uint16_t mtu, NimBLEL2CAPCh
     assert(callbacks); // fail here, if no callbacks are given
     assert(setupMemPool());
 
-    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X registered w/ L2CAP MTU %i", this->psm, this->mtu);
+    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X initialized w/ L2CAP MTU %i", this->psm, this->mtu);
 };
 
 NimBLEL2CAPChannel::~NimBLEL2CAPChannel() {
@@ -116,32 +118,43 @@ bool NimBLEL2CAPChannel::write(const std::vector<uint8_t>& bytes) {
     ble_l2cap_get_chan_info(channel, &info);
     auto mtu = info.peer_coc_mtu;
 
-    auto txd = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
-    if (!txd) {
-        NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_get_pkthdr.");
-        return false;
-    }
-    if (auto res = os_mbuf_append(txd, bytes.data(), toSend); res != 0) {
-        NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_append: %d", res);
-        return false;
-    }
-    auto res = ble_l2cap_send(channel, txd);
-    NIMBLE_LOGD(LOG_TAG, "ble_l2cap_send returned %d", res);
-    switch (res) {
-        case BLE_HS_ESTALLED:
-            stalled = true;
-            NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X sent %d bytes.", this->psm, toSend);
-            NIMBLE_LOGW(LOG_TAG, "ble_l2cap_send returned BLE_HS_ESTALLED. Next send will wait for unstalled event...");
-            return true;
+    while (true) {
 
-        case ESP_OK:
-            NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X sent %d bytes.", this->psm, toSend);
-            return true;
-
-        default:
-            NIMBLE_LOGE(LOG_TAG, "ble_l2cap_send failed: %d", res);
+        auto txd = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
+        if (!txd) {
+            NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_get_pkthdr.");
             return false;
+        }
+        if (auto res = os_mbuf_append(txd, bytes.data(), toSend); res != 0) {
+            NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_append: %d", res);
+            return false;
+        }
 
+        auto res = ble_l2cap_send(channel, txd);
+        switch (res) {
+            case BLE_HS_ESTALLED:
+                stalled = true;
+                NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X sent %d bytes.", this->psm, toSend);
+                NIMBLE_LOGW(LOG_TAG, "ble_l2cap_send returned BLE_HS_ESTALLED. Next send will wait for unstalled event...");
+                return true;
+
+            case BLE_HS_ENOMEM:
+            case BLE_HS_EAGAIN:
+            case BLE_HS_EBUSY:
+                NIMBLE_LOGD(LOG_TAG, "ble_l2cap_send returned %d. Retrying shortly...", res);
+                os_mbuf_free_chain(txd);
+                vTaskDelay(RetryTimeout);
+                continue;
+
+            case ESP_OK:
+                NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X sent %d bytes.", this->psm, toSend);
+                return true;
+
+            default:
+                NIMBLE_LOGE(LOG_TAG, "ble_l2cap_send failed: %d", res);
+                return false;
+
+        }
     }
 }
 
@@ -151,7 +164,12 @@ int NimBLEL2CAPChannel::handleConnectionEvent(struct ble_l2cap_event* event) {
     channel = event->connect.chan;
     struct ble_l2cap_chan_info info;
     ble_l2cap_get_chan_info(channel, &info);
-    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X connected. Our MTU is %i, remote MTU is %i.", psm, info.our_l2cap_mtu, info.peer_l2cap_mtu);
+    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X connected. Local MTU = %d [%d], remote MTU = %d [%d].", psm,
+        info.our_coc_mtu, info.our_l2cap_mtu, info.peer_coc_mtu, info.peer_l2cap_mtu);
+    if (info.our_coc_mtu > info.peer_coc_mtu) {
+        NIMBLE_LOGW(LOG_TAG, "L2CAP COC 0x%04X connected, but local MTU is bigger than remote MTU.", psm);
+    }
+
     callbacks->onConnect(this);
     return 0;
 }
