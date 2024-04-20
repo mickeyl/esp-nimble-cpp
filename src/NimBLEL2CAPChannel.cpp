@@ -73,6 +73,67 @@ void NimBLEL2CAPChannel::teardownMemPool() {
     if (_coc_memory) { free(_coc_memory); }
 }
 
+int NimBLEL2CAPChannel::writeFragment(std::vector<uint8_t>::const_iterator begin, std::vector<uint8_t>::const_iterator end) {
+
+    auto toSend = end - begin;
+
+    if (stalled) {
+        NIMBLE_LOGD(LOG_TAG, "L2CAP Channel waiting for unstall...");
+        xSemaphoreTake(this->stalledSemaphore, portMAX_DELAY);
+        stalled = false;
+        NIMBLE_LOGD(LOG_TAG, "L2CAP Channel unstalled!");
+    }
+
+    struct ble_l2cap_chan_info info;
+    ble_l2cap_get_chan_info(channel, &info);
+    // Take the minimum of our and peer MTU
+    auto mtu = info.peer_coc_mtu < info.our_coc_mtu ? info.peer_coc_mtu : info.our_coc_mtu;
+
+    if (toSend > mtu) {
+        return -BLE_HS_EBADDATA;
+    }
+
+    while (true) {
+
+        auto txd = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
+        if (!txd) {
+            NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_get_pkthdr.");
+            return -BLE_HS_ENOMEM;
+        }
+        if (auto res = os_mbuf_append(txd, &(*begin), toSend); res != 0) {
+            NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_append: %d", res);
+            return res;
+        }
+
+        auto res = ble_l2cap_send(channel, txd);
+        switch (res) {
+            case BLE_HS_ESTALLED:
+                stalled = true;
+                NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X sent %d bytes.", this->psm, toSend);
+                NIMBLE_LOGW(LOG_TAG, "ble_l2cap_send returned BLE_HS_ESTALLED. Next send will wait for unstalled event...");
+                return 0;
+
+            case BLE_HS_ENOMEM:
+            case BLE_HS_EAGAIN:
+            case BLE_HS_EBUSY:
+                NIMBLE_LOGD(LOG_TAG, "ble_l2cap_send returned %d. Retrying shortly...", res);
+                os_mbuf_free_chain(txd);
+                vTaskDelay(RetryTimeout);
+                continue;
+
+            case ESP_OK:
+                NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X sent %d bytes.", this->psm, toSend);
+                return 0;
+
+            default:
+                NIMBLE_LOGE(LOG_TAG, "ble_l2cap_send failed: %d", res);
+                return res;
+
+        }
+    }
+}
+
+#if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BT_NIMBLE_ROLE_CENTRAL)
 NimBLEL2CAPChannel* NimBLEL2CAPChannel::connect(NimBLEClient* client, uint16_t psm, uint16_t mtu, NimBLEL2CAPChannelCallbacks* callbacks) {
 
     if (!client->isConnected()) {
@@ -93,6 +154,7 @@ NimBLEL2CAPChannel* NimBLEL2CAPChannel::connect(NimBLEClient* client, uint16_t p
     }
     return channel;
 }
+#endif // CONFIG_BT_ENABLED && CONFIG_BT_NIMBLE_ROLE_CENTRAL
 
 bool NimBLEL2CAPChannel::write(const std::vector<uint8_t>& bytes) {
 
@@ -101,62 +163,19 @@ bool NimBLEL2CAPChannel::write(const std::vector<uint8_t>& bytes) {
         return false;
     }
 
-    auto toSend = bytes.size();
-
-    if (stalled) {
-        NIMBLE_LOGD(LOG_TAG, "L2CAP Channel waiting for unstall...");
-        xSemaphoreTake(this->stalledSemaphore, portMAX_DELAY);
-        stalled = false;
-        NIMBLE_LOGD(LOG_TAG, "L2CAP Channel unstalled!");
-    }
-
     struct ble_l2cap_chan_info info;
     ble_l2cap_get_chan_info(channel, &info);
-    // Take the minimum of our and peer MTU
     auto mtu = info.peer_coc_mtu < info.our_coc_mtu ? info.peer_coc_mtu : info.our_coc_mtu;
 
-    if (toSend > this->mtu) {
-        return false;
-    }
-
-    while (true) {
-
-        auto txd = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
-        if (!txd) {
-            NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_get_pkthdr.");
+    auto start = bytes.begin();
+    while (start != bytes.end()) {
+        auto end = start + mtu < bytes.end() ? start + mtu : bytes.end();
+        if (writeFragment(start, end) < 0) {
             return false;
         }
-        if (auto res = os_mbuf_append(txd, bytes.data(), toSend); res != 0) {
-            NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_append: %d", res);
-            return false;
-        }
-
-        auto res = ble_l2cap_send(channel, txd);
-        switch (res) {
-            case BLE_HS_ESTALLED:
-                stalled = true;
-                NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X sent %d bytes.", this->psm, toSend);
-                NIMBLE_LOGW(LOG_TAG, "ble_l2cap_send returned BLE_HS_ESTALLED. Next send will wait for unstalled event...");
-                return true;
-
-            case BLE_HS_ENOMEM:
-            case BLE_HS_EAGAIN:
-            case BLE_HS_EBUSY:
-                NIMBLE_LOGD(LOG_TAG, "ble_l2cap_send returned %d. Retrying shortly...", res);
-                os_mbuf_free_chain(txd);
-                vTaskDelay(RetryTimeout);
-                continue;
-
-            case ESP_OK:
-                NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X sent %d bytes.", this->psm, toSend);
-                return true;
-
-            default:
-                NIMBLE_LOGE(LOG_TAG, "ble_l2cap_send failed: %d", res);
-                return false;
-
-        }
+        start = end;
     }
+    return true;
 }
 
 // private

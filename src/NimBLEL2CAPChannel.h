@@ -1,9 +1,9 @@
 //
 // (C) Dr. Michael 'Mickey' Lauer <mickey@vanille-media.de>
 //
+#pragma once
 #ifndef NIMBLEL2CAPCHANNEL_H
 #define NIMBLEL2CAPCHANNEL_H
-#pragma once
 
 #include "inttypes.h"
 #include "host/ble_l2cap.h"
@@ -33,23 +33,19 @@ public:
     /// @return the channel on success, NULL otherwise.
     static NimBLEL2CAPChannel* connect(NimBLEClient* client, uint16_t psm, uint16_t mtu, NimBLEL2CAPChannelCallbacks* callbacks);
 
-    /// @brief Write data (up to the maximum length of one MTU) to the channel.
+    /// @brief Write data to the channel.
     ///
+    /// If the size of the data exceeds the MTU, the data will be split into multiple fragments.
     /// @return true on success, after the data has been sent.
-    /// @return false, if the data can't be sent or is too large.
+    /// @return false, if the data can't be sent.
     ///
-    /// NOTE: This function may block if the transmission is stalled.
+    /// NOTE: This function will block until the data has been sent or an error occurred.
     bool write(const std::vector<uint8_t>& bytes);
 
     /// @return whether the channel is connected.
     bool isConnected() const { return !!channel; }
 
 protected:
-
-
-
-
-
 
     NimBLEL2CAPChannel(uint16_t psm, uint16_t mtu, NimBLEL2CAPChannelCallbacks* callbacks);
     ~NimBLEL2CAPChannel();
@@ -64,10 +60,10 @@ private:
     static constexpr const char* LOG_TAG = "NimBLEL2CAPChannel";
 
     const uint16_t psm; // PSM of the channel
-    const uint16_t mtu; // The requested MTU of the channel, might be larger than negotiated MTU
+    const uint16_t mtu; // The requested (local) MTU of the channel, might be larger than negotiated MTU
     struct ble_l2cap_chan* channel = nullptr;
     NimBLEL2CAPChannelCallbacks* callbacks;
-    uint8_t* receiveBuffer = nullptr; // buffers a full MTU
+    uint8_t* receiveBuffer = nullptr; // buffers a full (local) MTU
 
     // NimBLE memory pool
     void* _coc_memory = nullptr;
@@ -81,6 +77,9 @@ private:
     // Allocate / deallocate NimBLE memory pool
     bool setupMemPool();
     void teardownMemPool();
+
+    // Writes data up to the size of the negotiated MTU to the channel.
+    int writeFragment(std::vector<uint8_t>::const_iterator begin, std::vector<uint8_t>::const_iterator end);
 
     // L2CAP event handler
     static int handleL2capEvent(struct ble_l2cap_event* event, void *arg);
