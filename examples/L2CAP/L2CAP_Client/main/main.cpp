@@ -41,8 +41,7 @@ class MyClientCallbacks: public BLEClientCallbacks {
 
     void onConnect(BLEClient* pClient) {
         printf("GAP connected\n");
-
-        //pClient->updateConnParams(6, 6, 0, 42);
+        pClient->setDataLen(251);
 
         theChannel = BLEL2CAPChannel::connect(pClient, L2CAP_CHANNEL, L2CAP_MTU, new L2CAPChannelCallbacks());
     }
