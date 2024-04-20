@@ -989,11 +989,14 @@ int NimBLEClient::handleGapEvent(struct ble_gap_event *event, void *arg) {
             if (rc == 0) {
                 NIMBLE_LOGI(LOG_TAG, "Connected event");
 
-                pClient->m_conn_id = event->connect.conn_handle;
                 // Set the data length to the BLE 5 maximum of 251 bytes.
                 // This _tremendously_ speeds up the throughput of your connection, in particular
                 // when sending larger payloads. The default is 27 bytes.
-                pClient->setDataLen(251);
+                // Thanks to Scott Rapson for pointing this out via 
+                // https://github.com/espressif/esp-idf/issues/12789#issuecomment-1876571012
+                ble_hs_hci_util_set_data_len(event->connect.conn_handle, 251, 2120);
+
+                pClient->m_conn_id = event->connect.conn_handle;
 
                 rc = ble_gattc_exchange_mtu(pClient->m_conn_id, NULL,NULL);
                 if(rc != 0) {
