@@ -103,10 +103,6 @@ bool NimBLEL2CAPChannel::write(const std::vector<uint8_t>& bytes) {
 
     auto toSend = bytes.size();
 
-    if (toSend > this->mtu) {
-        return false;
-    }
-
     if (stalled) {
         NIMBLE_LOGD(LOG_TAG, "L2CAP Channel waiting for unstall...");
         xSemaphoreTake(this->stalledSemaphore, portMAX_DELAY);
@@ -116,7 +112,12 @@ bool NimBLEL2CAPChannel::write(const std::vector<uint8_t>& bytes) {
 
     struct ble_l2cap_chan_info info;
     ble_l2cap_get_chan_info(channel, &info);
-    auto mtu = info.peer_coc_mtu;
+    // Take the minimum of our and peer MTU
+    auto mtu = info.peer_coc_mtu < info.our_coc_mtu ? info.peer_coc_mtu : info.our_coc_mtu;
+
+    if (toSend > this->mtu) {
+        return false;
+    }
 
     while (true) {
 
@@ -169,8 +170,8 @@ int NimBLEL2CAPChannel::handleConnectionEvent(struct ble_l2cap_event* event) {
     if (info.our_coc_mtu > info.peer_coc_mtu) {
         NIMBLE_LOGW(LOG_TAG, "L2CAP COC 0x%04X connected, but local MTU is bigger than remote MTU.", psm);
     }
-
-    callbacks->onConnect(this);
+    auto mtu = info.peer_coc_mtu < info.our_coc_mtu ? info.peer_coc_mtu : info.our_coc_mtu;
+    callbacks->onConnect(this, mtu);
     return 0;
 }
 

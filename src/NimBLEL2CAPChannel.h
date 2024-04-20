@@ -63,8 +63,8 @@ protected:
 private:
     static constexpr const char* LOG_TAG = "NimBLEL2CAPChannel";
 
-    const uint16_t psm;
-    const uint16_t mtu;
+    const uint16_t psm; // PSM of the channel
+    const uint16_t mtu; // The requested MTU of the channel, might be larger than negotiated MTU
     struct ble_l2cap_chan* channel = nullptr;
     NimBLEL2CAPChannelCallbacks* callbacks;
     uint8_t* receiveBuffer = nullptr; // buffers a full MTU
@@ -101,7 +101,7 @@ public:
     virtual bool shouldAcceptConnection(NimBLEL2CAPChannel* channel) { return true; }
     /// Called after a connection has been made.
     /// Default implementation does nothing.
-    virtual void onConnect(NimBLEL2CAPChannel* channel) {};
+    virtual void onConnect(NimBLEL2CAPChannel* channel, uint16_t negotiatedMTU) {};
     /// Called when data has been read from the channel.
     /// Default implementation does nothing.
     virtual void onRead(NimBLEL2CAPChannel* channel, std::vector<uint8_t>& data) {};
