@@ -15,15 +15,16 @@
 // Round-up integer division
 #define CEIL_DIVIDE(a, b) (((a) + (b) - 1) / (b))
 #define ROUND_DIVIDE(a, b) (((a) + (b) / 2) / (b))
-
+// Retry
 constexpr TickType_t RetryTimeout = pdMS_TO_TICKS(50);
+constexpr int RetryCounter = 3;
 
 NimBLEL2CAPChannel::NimBLEL2CAPChannel(uint16_t psm, uint16_t mtu, NimBLEL2CAPChannelCallbacks* callbacks)
                    :psm(psm), mtu(mtu), callbacks(callbacks) {
 
-    assert(mtu); // fails here, if MTU is too little
-    assert(callbacks); // fail here, if no callbacks are given
-    assert(setupMemPool());
+    assert(mtu);            // fail here, if MTU is too little
+    assert(callbacks);      // fail here, if no callbacks are given
+    assert(setupMemPool()); // fail here, if the memory pool could not be setup
 
     NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X initialized w/ L2CAP MTU %i", this->psm, this->mtu);
 };
@@ -93,7 +94,9 @@ int NimBLEL2CAPChannel::writeFragment(std::vector<uint8_t>::const_iterator begin
         return -BLE_HS_EBADDATA;
     }
 
-    while (true) {
+    auto retries = RetryCounter;
+
+    while (retries--) {
 
         auto txd = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
         if (!txd) {
@@ -131,6 +134,8 @@ int NimBLEL2CAPChannel::writeFragment(std::vector<uint8_t>::const_iterator begin
 
         }
     }
+    NIMBLE_LOGE(LOG_TAG, "Retries exhausted, dropping %d bytes to send.", toSend);
+    return -BLE_HS_EREJECT;
 }
 
 #if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BT_NIMBLE_ROLE_CENTRAL)
@@ -166,6 +171,7 @@ bool NimBLEL2CAPChannel::write(const std::vector<uint8_t>& bytes) {
     struct ble_l2cap_chan_info info;
     ble_l2cap_get_chan_info(channel, &info);
     auto mtu = info.peer_coc_mtu < info.our_coc_mtu ? info.peer_coc_mtu : info.our_coc_mtu;
+
 
     auto start = bytes.begin();
     while (start != bytes.end()) {

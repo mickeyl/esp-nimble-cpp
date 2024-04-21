@@ -25,12 +25,14 @@ class NimBLEL2CAPChannelCallbacks;
  */
 class NimBLEL2CAPChannel {
 
-    friend class NimBLEL2CAPServer;
-
 public:
     /// @brief Open an L2CAP channel via the specified PSM and MTU.
-    ///
-    /// @return the channel on success, NULL otherwise.
+    /// @param[in] psm The PSM to use.
+    /// @param[in] mtu The MTU to use. Note that this is the local MTU. Upon opening the channel,
+    /// the final MTU will be negotiated to be the minimum of local and remote.
+    /// @param[in] callbacks The callbacks to use. NOTE that these callbacks are called from the
+    /// context of the NimBLE bluetooth task (`nimble_host`) and MUST be handled as fast as possible.
+    /// @return True if the channel was opened successfully, false otherwise.
     static NimBLEL2CAPChannel* connect(NimBLEClient* client, uint16_t psm, uint16_t mtu, NimBLEL2CAPChannelCallbacks* callbacks);
 
     /// @brief Write data to the channel.
@@ -42,7 +44,7 @@ public:
     /// NOTE: This function will block until the data has been sent or an error occurred.
     bool write(const std::vector<uint8_t>& bytes);
 
-    /// @return whether the channel is connected.
+    /// @return True, if the channel is connected. False, otherwise.
     bool isConnected() const { return !!channel; }
 
 protected:
@@ -57,6 +59,7 @@ protected:
     int handleDisconnectionEvent(struct ble_l2cap_event* event);
 
 private:
+    friend class NimBLEL2CAPServer;
     static constexpr const char* LOG_TAG = "NimBLEL2CAPChannel";
 
     const uint16_t psm; // PSM of the channel
