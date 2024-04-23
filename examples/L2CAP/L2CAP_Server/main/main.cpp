@@ -12,7 +12,10 @@ class GATTCallbacks: public BLEServerCallbacks {
 
 public:
     void onConnect(BLEServer* pServer, BLEConnInfo& info) {
+        /// Booster #1
         pServer->setDataLen(info.getConnHandle(), 251);
+        /// Booster #2 (especially for Apple devices)
+        BLEDevice::getServer()->updateConnParams(info.getConnHandle(), 12, 12, 0, 200);
     }
 };
 
@@ -28,12 +31,6 @@ public:
         printf("L2CAP connection established\n");
         connected = true;
         numberOfReceivedBytes = nextSequenceNumber = 0;
-
-        /*
-        for (auto connection: BLEDevice::getServer()->getPeerDevices()) {
-            BLEDevice::getServer()->updateConnParams(connection, 6, 20, 0, 1000);
-        }
-        */
     }
 
     void onRead(NimBLEL2CAPChannel* channel, std::vector<uint8_t>& data) {
