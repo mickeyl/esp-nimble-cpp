@@ -204,4 +204,40 @@ config NIMBLE_CPP_FREERTOS_TASK_BLOCK_BIT
         Configure the bit to set in the task notification value when a task is blocked waiting for an event.
         This should be set to a bit that is not used by other notifications in the system.
 
+config NIMBLE_CPP_L2CAP_DEFERRED_READ_CALLBACKS
+    bool "Defer L2CAP read callbacks to a worker task."
+    default "n"
+    help
+        When enabled, NimBLEL2CAPChannel rearms receive first on the NimBLE host task
+        and then dispatches onRead() callbacks on a shared FreeRTOS worker task.
+        This reduces the risk of doing heavy application work directly on the NimBLE host path.
+
+if NIMBLE_CPP_L2CAP_DEFERRED_READ_CALLBACKS
+
+config NIMBLE_CPP_L2CAP_CALLBACK_TASK_STACK_SIZE
+    int "L2CAP callback worker stack size."
+    range 2048 32768
+    default 4096
+    help
+        Stack size in bytes for the shared worker task used to invoke deferred
+        L2CAP read callbacks.
+
+config NIMBLE_CPP_L2CAP_CALLBACK_TASK_PRIORITY
+    int "L2CAP callback worker task priority."
+    range 1 24
+    default 5
+    help
+        FreeRTOS priority for the shared worker task used to invoke deferred
+        L2CAP read callbacks.
+
+config NIMBLE_CPP_L2CAP_CALLBACK_QUEUE_LENGTH
+    int "L2CAP callback queue length."
+    range 4 128
+    default 16
+    help
+        Number of queued deferred L2CAP read callbacks allowed before the worker
+        falls back to inline delivery.
+
+endif
+
 endmenu

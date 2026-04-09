@@ -8,6 +8,8 @@
 # include "NimBLEClient.h"
 # include "NimBLELog.h"
 # include "NimBLEUtils.h"
+# include "freertos/queue.h"
+# include "freertos/task.h"
 
 # ifdef USING_NIMBLE_ARDUINO_HEADERS
 #  include "nimble/nimble/host/include/host/ble_gap.h"
@@ -15,50 +17,160 @@
 #  include "host/ble_gap.h"
 # endif
 
-// L2CAP buffer block size
-# define L2CAP_BUF_BLOCK_SIZE            (250)
-# define L2CAP_BUF_SIZE_MTUS_PER_CHANNEL (3)
-// Round-up integer division
-# define CEIL_DIVIDE(a, b)               (((a) + (b) - 1) / (b))
-# define ROUND_DIVIDE(a, b)              (((a) + (b) / 2) / (b))
+// Allocate one full SDU per mbuf, matching NimBLE's own CoC examples.
+# define L2CAP_SDU_BUFFER_COUNT (5)
 // Retry
 constexpr uint32_t RetryTimeout = 50;
 constexpr int      RetryCounter = 3;
+
+static void logPoolSanityWarning(const char* tag, uint16_t psm, const ble_l2cap_chan_info& info) {
+    const uint16_t negotiatedCocMtu = info.peer_coc_mtu < info.our_coc_mtu ? info.peer_coc_mtu : info.our_coc_mtu;
+    const uint16_t effectiveL2capMtu = info.peer_l2cap_mtu < info.our_l2cap_mtu ? info.peer_l2cap_mtu : info.our_l2cap_mtu;
+
+    if (negotiatedCocMtu == 0 || effectiveL2capMtu == 0) {
+        return;
+    }
+
+    const uint32_t fragmentsPerSdu = (negotiatedCocMtu + effectiveL2capMtu - 1) / effectiveL2capMtu;
+    const uint32_t msys1BlockCount = MYNEWT_VAL(MSYS_1_BLOCK_COUNT);
+    const uint32_t msys1BlockSize = MYNEWT_VAL(MSYS_1_BLOCK_SIZE);
+    const uint32_t cocMps = MYNEWT_VAL(BLE_L2CAP_COC_MPS);
+    const uint32_t aclFromLlCount = MYNEWT_VAL(BLE_TRANSPORT_ACL_FROM_LL_COUNT);
+
+    NIMBLE_LOGI(tag,
+                "L2CAP COC 0x%04X path geometry: negotiated_coc=%u effective_l2cap=%u fragments_per_sdu=%lu mps=%lu msys1=%lux%lu acl_from_ll=%lu",
+                psm,
+                negotiatedCocMtu,
+                effectiveL2capMtu,
+                (unsigned long)fragmentsPerSdu,
+                (unsigned long)cocMps,
+                (unsigned long)msys1BlockCount,
+                (unsigned long)msys1BlockSize,
+                (unsigned long)aclFromLlCount);
+
+    if (effectiveL2capMtu < negotiatedCocMtu &&
+        (fragmentsPerSdu >= msys1BlockCount || fragmentsPerSdu * 2 >= msys1BlockCount || fragmentsPerSdu >= aclFromLlCount)) {
+        NIMBLE_LOGW(tag,
+                    "L2CAP COC 0x%04X large-SDU risk: negotiated MTU %u requires %lu fragments at L2CAP MTU %u. Current pools (MSYS_1=%lux%lu, ACL_FROM_LL=%lu) may cause ENOMEM/timeouts under load.",
+                    psm,
+                    negotiatedCocMtu,
+                    (unsigned long)fragmentsPerSdu,
+                    effectiveL2capMtu,
+                    (unsigned long)msys1BlockCount,
+                    (unsigned long)msys1BlockSize,
+                    (unsigned long)aclFromLlCount);
+    }
+}
+
+#if CONFIG_NIMBLE_CPP_L2CAP_DEFERRED_READ_CALLBACKS
+struct DeferredReadItem {
+    NimBLEL2CAPChannel*     channel;
+    std::vector<uint8_t>*   data;
+};
+
+static QueueHandle_t     s_l2capDeferredReadQueue = nullptr;
+static TaskHandle_t      s_l2capDeferredReadTask  = nullptr;
+static SemaphoreHandle_t s_l2capDeferredInitLock  = nullptr;
+
+void deferredReadWorker(void*) {
+    DeferredReadItem item{};
+    while (true) {
+        if (xQueueReceive(s_l2capDeferredReadQueue, &item, portMAX_DELAY) == pdTRUE) {
+            if (item.channel != nullptr) {
+                item.channel->m_pendingDeferredReads.fetch_sub(1);
+            }
+            if (item.channel != nullptr && item.data != nullptr && item.channel->callbacks != nullptr) {
+                item.channel->callbacks->onRead(item.channel, *item.data);
+            }
+            delete item.data;
+        }
+    }
+}
+
+bool ensureDeferredReadWorker() {
+    if (s_l2capDeferredReadQueue != nullptr && s_l2capDeferredReadTask != nullptr) {
+        return true;
+    }
+
+    if (s_l2capDeferredInitLock == nullptr) {
+        s_l2capDeferredInitLock = xSemaphoreCreateMutex();
+        if (s_l2capDeferredInitLock == nullptr) {
+            return false;
+        }
+    }
+
+    if (xSemaphoreTake(s_l2capDeferredInitLock, portMAX_DELAY) != pdTRUE) {
+        return false;
+    }
+
+    if (s_l2capDeferredReadQueue == nullptr) {
+        s_l2capDeferredReadQueue = xQueueCreate(CONFIG_NIMBLE_CPP_L2CAP_CALLBACK_QUEUE_LENGTH, sizeof(DeferredReadItem));
+    }
+
+    if (s_l2capDeferredReadQueue != nullptr && s_l2capDeferredReadTask == nullptr) {
+        BaseType_t rc = xTaskCreate(
+            deferredReadWorker,
+            "nimble_l2cap_cb",
+            CONFIG_NIMBLE_CPP_L2CAP_CALLBACK_TASK_STACK_SIZE,
+            nullptr,
+            CONFIG_NIMBLE_CPP_L2CAP_CALLBACK_TASK_PRIORITY,
+            &s_l2capDeferredReadTask);
+        if (rc != pdPASS) {
+            s_l2capDeferredReadTask = nullptr;
+        }
+    }
+
+    const bool ok = s_l2capDeferredReadQueue != nullptr && s_l2capDeferredReadTask != nullptr;
+    xSemaphoreGive(s_l2capDeferredInitLock);
+    return ok;
+}
+#endif
 
 NimBLEL2CAPChannel::NimBLEL2CAPChannel(uint16_t psm, uint16_t mtu, NimBLEL2CAPChannelCallbacks* callbacks)
     : psm(psm), mtu(mtu), callbacks(callbacks) {
     assert(mtu);            // fail here, if MTU is too little
     assert(callbacks);      // fail here, if no callbacks are given
     assert(setupMemPool()); // fail here, if the memory pool could not be setup
+#if CONFIG_NIMBLE_CPP_L2CAP_DEFERRED_READ_CALLBACKS
+    assert(ensureDeferredReadWorker());
+#endif
+    m_unstallSem = xSemaphoreCreateBinary();
+    assert(m_unstallSem);
 
     NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X initialized w/ L2CAP MTU %i", this->psm, this->mtu);
 };
 
 NimBLEL2CAPChannel::~NimBLEL2CAPChannel() {
+    while (m_pendingDeferredReads.load() > 0) {
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
     teardownMemPool();
 
     NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X shutdown and freed.", this->psm);
 }
 
 bool NimBLEL2CAPChannel::setupMemPool() {
-    const size_t buf_blocks = CEIL_DIVIDE(mtu, L2CAP_BUF_BLOCK_SIZE) * L2CAP_BUF_SIZE_MTUS_PER_CHANNEL;
-    NIMBLE_LOGD(LOG_TAG, "Computed number of buf_blocks = %d", buf_blocks);
+    const size_t buf_blocks = L2CAP_SDU_BUFFER_COUNT;
+    NIMBLE_LOGD(LOG_TAG, "Allocating %d L2CAP SDU buffers of %d bytes", buf_blocks, mtu);
 
-    _coc_memory = malloc(OS_MEMPOOL_SIZE(buf_blocks, L2CAP_BUF_BLOCK_SIZE) * sizeof(os_membuf_t));
+    memset(&_coc_mempool, 0, sizeof(_coc_mempool));
+    memset(&_coc_mbuf_pool, 0, sizeof(_coc_mbuf_pool));
+
+    _coc_memory = malloc(OS_MEMPOOL_SIZE(buf_blocks, mtu) * sizeof(os_membuf_t));
     if (_coc_memory == 0) {
         NIMBLE_LOGE(LOG_TAG, "Can't allocate _coc_memory: %d", errno);
         return false;
     }
 
-    auto rc = os_mempool_init(&_coc_mempool, buf_blocks, L2CAP_BUF_BLOCK_SIZE, _coc_memory, "appbuf");
+    auto rc = os_mempool_init(&_coc_mempool, buf_blocks, mtu, _coc_memory, "appbuf");
     if (rc != 0) {
         NIMBLE_LOGE(LOG_TAG, "Can't os_mempool_init: %d", rc);
         return false;
     }
 
-    auto rc2 = os_mbuf_pool_init(&_coc_mbuf_pool, &_coc_mempool, L2CAP_BUF_BLOCK_SIZE, buf_blocks);
+    auto rc2 = os_mbuf_pool_init(&_coc_mbuf_pool, &_coc_mempool, mtu, buf_blocks);
     if (rc2 != 0) {
-        NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_pool_init: %d", rc);
+        NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_pool_init: %d", rc2);
         return false;
     }
 
@@ -72,14 +184,26 @@ bool NimBLEL2CAPChannel::setupMemPool() {
 }
 
 void NimBLEL2CAPChannel::teardownMemPool() {
+    if (m_unstallSem) {
+        vSemaphoreDelete(m_unstallSem);
+        m_unstallSem = nullptr;
+    }
     if (this->callbacks) {
         delete this->callbacks;
+        this->callbacks = nullptr;
     }
     if (this->receiveBuffer) {
         free(this->receiveBuffer);
+        this->receiveBuffer = nullptr;
+    }
+    if (_coc_mempool.name) {
+        os_mempool_unregister(&_coc_mempool);
+        memset(&_coc_mempool, 0, sizeof(_coc_mempool));
+        memset(&_coc_mbuf_pool, 0, sizeof(_coc_mbuf_pool));
     }
     if (_coc_memory) {
         free(_coc_memory);
+        _coc_memory = nullptr;
     }
 }
 
@@ -87,13 +211,17 @@ int NimBLEL2CAPChannel::writeFragment(std::vector<uint8_t>::const_iterator begin
     auto toSend = end - begin;
 
     if (stalled) {
-        NIMBLE_LOGD(LOG_TAG, "L2CAP Channel waiting for unstall...");
-        NimBLETaskData taskData;
-        m_pTaskData = &taskData;
-        NimBLEUtils::taskWait(taskData, BLE_NPL_TIME_FOREVER);
-        m_pTaskData = nullptr;
-        stalled     = false;
-        NIMBLE_LOGD(LOG_TAG, "L2CAP Channel unstalled!");
+        NIMBLE_LOGW(LOG_TAG, "L2CAP COC 0x%04X waiting for TX_UNSTALLED.", this->psm);
+        xSemaphoreTake(m_unstallSem, 0);
+        m_unstallStatus.store(BLE_HS_EUNKNOWN);
+        xSemaphoreTake(m_unstallSem, portMAX_DELAY);
+        const int unstallStatus = m_unstallStatus.load();
+        stalled                 = false;
+        NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X TX_UNSTALLED status=%d.", this->psm, unstallStatus);
+        if (unstallStatus != 0) {
+            NIMBLE_LOGE(LOG_TAG, "Pending L2CAP SDU completion failed: %d", unstallStatus);
+            return unstallStatus;
+        }
     }
 
     struct ble_l2cap_chan_info info;
@@ -116,6 +244,7 @@ int NimBLEL2CAPChannel::writeFragment(std::vector<uint8_t>::const_iterator begin
         auto append = os_mbuf_append(txd, &(*begin), toSend);
         if (append != 0) {
             NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_append: %d", append);
+            os_mbuf_free_chain(txd);
             return append;
         }
 
@@ -127,17 +256,23 @@ int NimBLEL2CAPChannel::writeFragment(std::vector<uint8_t>::const_iterator begin
 
             case BLE_HS_ESTALLED:
                 stalled = true;
-                NIMBLE_LOGD(LOG_TAG, "L2CAP COC 0x%04X sent %d bytes.", this->psm, toSend);
-                NIMBLE_LOGW(LOG_TAG,
-                            "ble_l2cap_send returned BLE_HS_ESTALLED. Next send will wait for unstalled event...");
+                NIMBLE_LOGW(LOG_TAG, "L2CAP COC 0x%04X send stalled; waiting for TX_UNSTALLED.", this->psm);
+                xSemaphoreTake(m_unstallSem, 0);
+                m_unstallStatus.store(BLE_HS_EUNKNOWN);
+                xSemaphoreTake(m_unstallSem, portMAX_DELAY);
+                stalled = false;
+                if (m_unstallStatus.load() != 0) {
+                    NIMBLE_LOGE(LOG_TAG, "L2CAP COC 0x%04X stalled send failed with status %d.",
+                                this->psm, m_unstallStatus.load());
+                    return m_unstallStatus.load();
+                }
                 return 0;
 
             case BLE_HS_ENOMEM:
             case BLE_HS_EAGAIN:
-                /* ble_l2cap_send already consumed and freed txd on these errors */
-                NIMBLE_LOGD(LOG_TAG, "ble_l2cap_send returned %d (consumed buffer). Retrying shortly...", res);
-                ble_npl_time_delay(ble_npl_time_ms_to_ticks32(RetryTimeout));
-                continue;
+                /* This error path is consumed by NimBLE; retrying the same SDU can duplicate partial data. */
+                NIMBLE_LOGE(LOG_TAG, "L2CAP COC 0x%04X send failed with consumed error %d; dropping channel state.", this->psm, res);
+                return res;
 
             case BLE_HS_EBUSY:
                 /* Channel busy; txd not consumed */
@@ -148,6 +283,7 @@ int NimBLEL2CAPChannel::writeFragment(std::vector<uint8_t>::const_iterator begin
 
             default:
                 NIMBLE_LOGE(LOG_TAG, "ble_l2cap_send failed: %d", res);
+                os_mbuf_free_chain(txd);
                 return res;
         }
     }
@@ -172,11 +308,15 @@ NimBLEL2CAPChannel* NimBLEL2CAPChannel::connect(NimBLEClient*                cli
     auto sdu_rx = os_mbuf_get_pkthdr(&channel->_coc_mbuf_pool, 0);
     if (!sdu_rx) {
         NIMBLE_LOGE(LOG_TAG, "Can't allocate SDU buffer: %d, %s", errno, strerror(errno));
+        delete channel;
         return nullptr;
     }
     auto rc = ble_l2cap_connect(client->getConnHandle(), psm, mtu, sdu_rx, NimBLEL2CAPChannel::handleL2capEvent, channel);
     if (rc != 0) {
         NIMBLE_LOGE(LOG_TAG, "ble_l2cap_connect failed: %d", rc);
+        os_mbuf_free_chain(sdu_rx);
+        delete channel;
+        return nullptr;
     }
     return channel;
 }
@@ -195,7 +335,9 @@ bool NimBLEL2CAPChannel::write(const std::vector<uint8_t>& bytes) {
     auto start = bytes.begin();
     while (start != bytes.end()) {
         auto end = start + mtu < bytes.end() ? start + mtu : bytes.end();
-        if (writeFragment(start, end) < 0) {
+        int rc = writeFragment(start, end);
+        if (rc < 0) {
+            this->disconnect();
             return false;
         }
         start = end;
@@ -228,20 +370,48 @@ uint16_t NimBLEL2CAPChannel::getConnHandle() const {
 // private
 int NimBLEL2CAPChannel::handleConnectionEvent(struct ble_l2cap_event* event) {
     channel = event->connect.chan;
+    xSemaphoreTake(m_unstallSem, 0);
+    m_unstallStatus.store(0);
+    stalled = false;
     struct ble_l2cap_chan_info info;
-    ble_l2cap_get_chan_info(channel, &info);
+    int rc = ble_l2cap_get_chan_info(channel, &info);
+    if (rc != 0) {
+        NIMBLE_LOGE(LOG_TAG, "L2CAP COC 0x%04X connected but ble_l2cap_get_chan_info failed: %d", psm, rc);
+        callbacks->onConnect(this, mtu);
+        return 0;
+    }
     NIMBLE_LOGI(LOG_TAG,
-                "L2CAP COC 0x%04X connected. Local MTU = %d [%d], remote MTU = %d [%d].",
+                "L2CAP COC 0x%04X connected. scid=0x%04X dcid=0x%04X local_l2cap=%d local_coc=%d peer_l2cap=%d peer_coc=%d.",
                 psm,
-                info.our_coc_mtu,
+                info.scid,
+                info.dcid,
                 info.our_l2cap_mtu,
-                info.peer_coc_mtu,
-                info.peer_l2cap_mtu);
-    if (info.our_coc_mtu > info.peer_coc_mtu) {
+                info.our_coc_mtu,
+                info.peer_l2cap_mtu,
+                info.peer_coc_mtu);
+    logPoolSanityWarning(LOG_TAG, psm, info);
+    if (info.our_coc_mtu > 0 && info.peer_coc_mtu > 0 && info.our_coc_mtu > info.peer_coc_mtu) {
         NIMBLE_LOGW(LOG_TAG, "L2CAP COC 0x%04X connected, but local MTU is bigger than remote MTU.", psm);
     }
-    auto mtu = info.peer_coc_mtu < info.our_coc_mtu ? info.peer_coc_mtu : info.our_coc_mtu;
-    callbacks->onConnect(this, mtu);
+
+    uint16_t negotiatedMTU = 0;
+    if (info.our_coc_mtu > 0 && info.peer_coc_mtu > 0) {
+        negotiatedMTU = info.peer_coc_mtu < info.our_coc_mtu ? info.peer_coc_mtu : info.our_coc_mtu;
+    } else if (info.our_l2cap_mtu > 0 && info.peer_l2cap_mtu > 0) {
+        negotiatedMTU = info.peer_l2cap_mtu < info.our_l2cap_mtu ? info.peer_l2cap_mtu : info.our_l2cap_mtu;
+        NIMBLE_LOGW(LOG_TAG,
+                    "L2CAP COC 0x%04X connected with zero CoC MTU info; falling back to L2CAP MTU %u for callback.",
+                    psm,
+                    negotiatedMTU);
+    } else {
+        negotiatedMTU = mtu;
+        NIMBLE_LOGW(LOG_TAG,
+                    "L2CAP COC 0x%04X connected with no peer MTU info; falling back to configured MTU %u for callback.",
+                    psm,
+                    negotiatedMTU);
+    }
+
+    callbacks->onConnect(this, negotiatedMTU);
     return 0;
 }
 
@@ -253,8 +423,18 @@ int NimBLEL2CAPChannel::handleAcceptEvent(struct ble_l2cap_event* event) {
     }
 
     struct os_mbuf* sdu_rx = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
-    assert(sdu_rx != NULL);
-    ble_l2cap_recv_ready(event->accept.chan, sdu_rx);
+    if (!sdu_rx) {
+        NIMBLE_LOGE(LOG_TAG, "L2CAP COC 0x%04X could not allocate receive SDU.", psm);
+        return BLE_HS_ENOMEM;
+    }
+
+    int rc = ble_l2cap_recv_ready(event->accept.chan, sdu_rx);
+    if (rc != 0) {
+        NIMBLE_LOGE(LOG_TAG, "L2CAP COC 0x%04X ble_l2cap_recv_ready failed during accept: %d", psm, rc);
+        os_mbuf_free_chain(sdu_rx);
+        return rc;
+    }
+
     return 0;
 }
 
@@ -276,7 +456,6 @@ int NimBLEL2CAPChannel::handleDataReceivedEvent(struct ble_l2cap_event* event) {
     assert(res == 0);
 
     std::vector<uint8_t> incomingData(receiveBuffer, receiveBuffer + rx_len);
-    callbacks->onRead(this, incomingData);
 
     struct os_mbuf* next = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
     assert(next != NULL);
@@ -284,20 +463,35 @@ int NimBLEL2CAPChannel::handleDataReceivedEvent(struct ble_l2cap_event* event) {
     res = ble_l2cap_recv_ready(channel, next);
     assert(res == 0);
 
+#if CONFIG_NIMBLE_CPP_L2CAP_DEFERRED_READ_CALLBACKS
+    auto deferredData = new std::vector<uint8_t>(std::move(incomingData));
+    DeferredReadItem item{this, deferredData};
+    m_pendingDeferredReads.fetch_add(1);
+    if (xQueueSend(s_l2capDeferredReadQueue, &item, 0) != pdTRUE) {
+        m_pendingDeferredReads.fetch_sub(1);
+        NIMBLE_LOGW(LOG_TAG, "L2CAP COC 0x%04X deferred callback queue full; falling back to inline onRead.", psm);
+        callbacks->onRead(this, *deferredData);
+        delete deferredData;
+    }
+#else
+    callbacks->onRead(this, incomingData);
+#endif
+
     return 0;
 }
 
 int NimBLEL2CAPChannel::handleTxUnstalledEvent(struct ble_l2cap_event* event) {
-    if (m_pTaskData != nullptr) {
-        NimBLEUtils::taskRelease(*m_pTaskData, event->tx_unstalled.status);
-    }
-
-    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X transmit unstalled.", psm);
+    m_unstallStatus.store(event->tx_unstalled.status);
+    xSemaphoreGive(m_unstallSem);
+    NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X transmit unstalled (status=%d).", psm, event->tx_unstalled.status);
     return 0;
 }
 
 int NimBLEL2CAPChannel::handleDisconnectionEvent(struct ble_l2cap_event* event) {
     NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X disconnected.", psm);
+    xSemaphoreTake(m_unstallSem, 0);
+    m_unstallStatus.store(0);
+    stalled = false;
     channel = NULL;
     callbacks->onDisconnect(this);
     return 0;

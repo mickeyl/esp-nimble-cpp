@@ -24,10 +24,11 @@
 
 # include <vector>
 # include <atomic>
+# include "freertos/FreeRTOS.h"
+# include "freertos/semphr.h"
 
 class NimBLEClient;
 class NimBLEL2CAPChannelCallbacks;
-struct NimBLETaskData;
 
 /**
  * @brief Encapsulates a L2CAP channel.
@@ -43,7 +44,8 @@ class NimBLEL2CAPChannel {
     /// @param[in] mtu The MTU to use. Note that this is the local MTU. Upon opening the channel,
     /// the final MTU will be negotiated to be the minimum of local and remote.
     /// @param[in] callbacks The callbacks to use. NOTE that these callbacks are called from the
-    /// context of the NimBLE bluetooth task (`nimble_host`) and MUST be handled as fast as possible.
+    /// context of the NimBLE bluetooth task (`nimble_host`) unless deferred read callbacks are
+    /// enabled in sdkconfig. In that mode, onRead() runs on a shared worker task instead.
     /// @return True if the channel was opened successfully, false otherwise.
     static NimBLEL2CAPChannel* connect(NimBLEClient* client, uint16_t psm, uint16_t mtu, NimBLEL2CAPChannelCallbacks* callbacks);
 
@@ -63,13 +65,13 @@ class NimBLEL2CAPChannel {
     /// @brief Get the connection handle associated with this channel.
     /// @return Connection handle, or BLE_HS_CONN_HANDLE_NONE if not connected.
     uint16_t getConnHandle() const;
-
     /// @return True, if the channel is connected. False, otherwise.
     bool isConnected() const { return !!channel; }
 
+    ~NimBLEL2CAPChannel();
+
   protected:
     NimBLEL2CAPChannel(uint16_t psm, uint16_t mtu, NimBLEL2CAPChannelCallbacks* callbacks);
-    ~NimBLEL2CAPChannel();
 
     int handleConnectionEvent(struct ble_l2cap_event* event);
     int handleAcceptEvent(struct ble_l2cap_event* event);
@@ -79,6 +81,9 @@ class NimBLEL2CAPChannel {
 
   private:
     friend class NimBLEL2CAPServer;
+#if CONFIG_NIMBLE_CPP_L2CAP_DEFERRED_READ_CALLBACKS
+    friend void deferredReadWorker(void*);
+#endif
     static constexpr const char* LOG_TAG = "NimBLEL2CAPChannel";
 
     const uint16_t               psm; // PSM of the channel
@@ -93,8 +98,10 @@ class NimBLEL2CAPChannel {
     struct os_mbuf_pool _coc_mbuf_pool;
 
     // Runtime handling
-    std::atomic<bool> stalled{false};
-    NimBLETaskData*   m_pTaskData{nullptr};
+    std::atomic<bool>  stalled{false};
+    std::atomic<int>   m_unstallStatus{0};
+    SemaphoreHandle_t  m_unstallSem{nullptr};
+    std::atomic<uint32_t> m_pendingDeferredReads{0};
 
     // Allocate / deallocate NimBLE memory pool
     bool setupMemPool();
