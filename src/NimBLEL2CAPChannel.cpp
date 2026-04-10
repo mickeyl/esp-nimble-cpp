@@ -18,7 +18,7 @@
 # endif
 
 // Allocate one full SDU per mbuf, matching NimBLE's own CoC examples.
-# define L2CAP_SDU_BUFFER_COUNT (5)
+# define L2CAP_SDU_BUFFER_COUNT CONFIG_NIMBLE_CPP_L2CAP_SDU_BUFFER_COUNT
 // Retry
 constexpr uint32_t RetryTimeout = 50;
 constexpr int      RetryCounter = 3;
@@ -36,14 +36,16 @@ static void logPoolSanityWarning(const char* tag, uint16_t psm, const ble_l2cap_
     const uint32_t msys1BlockSize = MYNEWT_VAL(MSYS_1_BLOCK_SIZE);
     const uint32_t cocMps = MYNEWT_VAL(BLE_L2CAP_COC_MPS);
     const uint32_t aclFromLlCount = MYNEWT_VAL(BLE_TRANSPORT_ACL_FROM_LL_COUNT);
+    const uint32_t localSduBufferCount = L2CAP_SDU_BUFFER_COUNT;
 
     NIMBLE_LOGI(tag,
-                "L2CAP COC 0x%04X path geometry: negotiated_coc=%u effective_l2cap=%u fragments_per_sdu=%lu mps=%lu msys1=%lux%lu acl_from_ll=%lu",
+                "L2CAP COC 0x%04X path geometry: negotiated_coc=%u effective_l2cap=%u fragments_per_sdu=%lu mps=%lu local_sdu_bufs=%lu msys1=%lux%lu acl_from_ll=%lu",
                 psm,
                 negotiatedCocMtu,
                 effectiveL2capMtu,
                 (unsigned long)fragmentsPerSdu,
                 (unsigned long)cocMps,
+                (unsigned long)localSduBufferCount,
                 (unsigned long)msys1BlockCount,
                 (unsigned long)msys1BlockSize,
                 (unsigned long)aclFromLlCount);
@@ -59,6 +61,13 @@ static void logPoolSanityWarning(const char* tag, uint16_t psm, const ble_l2cap_
                     (unsigned long)msys1BlockCount,
                     (unsigned long)msys1BlockSize,
                     (unsigned long)aclFromLlCount);
+    }
+
+    if (localSduBufferCount < 3) {
+        NIMBLE_LOGW(tag,
+                    "L2CAP COC 0x%04X local SDU buffer count is %lu. Very small per-channel SDU pools reduce heap use but can make large MTUs fragile when send/receive work overlaps or callbacks lag.",
+                    psm,
+                    (unsigned long)localSduBufferCount);
     }
 }
 
