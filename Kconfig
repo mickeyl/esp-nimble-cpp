@@ -233,7 +233,8 @@ config NIMBLE_CPP_L2CAP_DEFERRED_READ_CALLBACKS
     default "n"
     help
         When enabled, NimBLEL2CAPChannel rearms receive first on the NimBLE host task
-        and then dispatches onRead() callbacks on a shared FreeRTOS worker task.
+        and then dispatches onConnect() and onRead() callbacks on a shared worker task.
+        Disconnect callbacks always run on that worker, outside the NimBLE host lock.
         This reduces the risk of doing heavy application work directly on the NimBLE host path.
 
 if NIMBLE_CPP_L2CAP_DEFERRED_READ_CALLBACKS
@@ -259,8 +260,8 @@ config NIMBLE_CPP_L2CAP_CALLBACK_QUEUE_LENGTH
     range 4 128
     default 16
     help
-        Number of queued deferred L2CAP read callbacks allowed before the worker
-        falls back to inline delivery.
+        Number of queued deferred L2CAP read callbacks. Overflow aborts the
+        connection; additional reserved slots guarantee lifecycle delivery.
 
 endif
 
