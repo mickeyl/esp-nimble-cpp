@@ -90,6 +90,7 @@ struct DeferredReadItem {
 };
 static QueueHandle_t s_l2capDeferredReadQueue = nullptr;
 static TaskHandle_t s_l2capDeferredReadTask = nullptr;
+static size_t s_l2capChannelCount = 0;
 static constexpr size_t LifecycleSlots = 2 * MYNEWT_VAL(BLE_L2CAP_COC_MAX_NUM);
 
 void deferredReadWorker(void*) {
@@ -196,6 +197,7 @@ NimBLEL2CAPChannel::NimBLEL2CAPChannel(uint16_t psm, uint16_t mtu, NimBLEL2CAPCh
     assert(poolReady); // fail here, if the memory pool could not be setup
     const bool workerReady = ensureDeferredReadWorker();
     assert(workerReady);
+    ++s_l2capChannelCount;
     m_writeMutex = xSemaphoreCreateMutex();
     assert(m_writeMutex);
     m_completion = std::make_unique<TxCompletion>();
@@ -213,6 +215,16 @@ NimBLEL2CAPChannel::~NimBLEL2CAPChannel() {
     ble_npl_event_deinit(&m_txEvent);
     ble_npl_event_deinit(&m_disconnectEvent);
     teardownMemPool();
+
+    // All producers and callbacks have drained before the last channel is
+    // destroyed. Keeping the shared worker would retain its internal stack
+    // and queue across a full Bluetooth shutdown.
+    if (--s_l2capChannelCount == 0) {
+        vTaskDelete(s_l2capDeferredReadTask);
+        s_l2capDeferredReadTask = nullptr;
+        vQueueDelete(s_l2capDeferredReadQueue);
+        s_l2capDeferredReadQueue = nullptr;
+    }
 
     NIMBLE_LOGI(LOG_TAG, "L2CAP COC 0x%04X shutdown and freed.", this->psm);
 }

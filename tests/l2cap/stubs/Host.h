@@ -165,14 +165,35 @@ class NimBLEUtils {
 };
 #include <deque>
 using TaskHandle_t = void*;
+struct HostTaskExit {};
+struct HostTask {
+    std::atomic<bool> cancelled{false};
+    std::thread thread;
+};
+inline thread_local HostTask* currentHostTask = nullptr;
+inline std::atomic<int> hostTaskCount{0};
+inline std::atomic<int> hostQueueCount{0};
 inline TaskHandle_t xTaskGetCurrentTaskHandle() {
     thread_local int token;
     return &token;
 }
 inline int xTaskCreate(void (*fn)(void*), const char*, uint32_t, void* arg, int, TaskHandle_t* handle) {
-    *handle = reinterpret_cast<void*>(1);
-    std::thread([=] { fn(arg); }).detach();
+    auto task = new HostTask;
+    *handle = task;
+    ++hostTaskCount;
+    task->thread = std::thread([=] {
+        currentHostTask = task;
+        try { fn(arg); } catch (const HostTaskExit&) {}
+    });
     return pdPASS;
+}
+inline void vTaskDelete(TaskHandle_t handle) {
+    auto task = static_cast<HostTask*>(handle);
+    assert(task && task != currentHostTask);
+    task->cancelled = true;
+    task->thread.join();
+    delete task;
+    --hostTaskCount;
 }
 struct HostQueue {
     std::mutex                       mutex;
@@ -182,10 +203,16 @@ struct HostQueue {
 };
 using QueueHandle_t = HostQueue*;
 inline QueueHandle_t xQueueCreate(size_t n, size_t w) {
+    ++hostQueueCount;
     auto q      = new HostQueue;
     q->capacity = n;
     q->width    = w;
     return q;
+}
+inline void vQueueDelete(QueueHandle_t q) {
+    assert(q->items.empty());
+    delete q;
+    --hostQueueCount;
 }
 inline size_t uxQueueSpacesAvailable(QueueHandle_t q) {
     std::lock_guard<std::mutex> l(q->mutex);
@@ -201,7 +228,10 @@ inline int xQueueSend(QueueHandle_t q, const void* item, TickType_t) {
 }
 inline int xQueueReceive(QueueHandle_t q, void* item, TickType_t) {
     std::unique_lock<std::mutex> l(q->mutex);
-    q->cv.wait(l, [&] { return !q->items.empty(); });
+    while (q->items.empty()) {
+        if (currentHostTask && currentHostTask->cancelled.load()) { throw HostTaskExit{}; }
+        q->cv.wait_for(l, std::chrono::milliseconds(1));
+    }
     memcpy(item, q->items.front().data(), q->width);
     q->items.pop_front();
     return pdTRUE;

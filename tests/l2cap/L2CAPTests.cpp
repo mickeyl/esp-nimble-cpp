@@ -76,7 +76,21 @@ struct Channel : NimBLEL2CAPChannel {
 int main(int argc, char** argv) {
     try {
         const std::string name = argc > 1 ? argv[1] : "errors";
-        if (name == "errors") {
+        if (name == "lifecycle") {
+            nimble_port_get_dflt_eventq();
+            const int baselineQueues = hostQueueCount.load();
+            for (int cycle = 0; cycle < 30; ++cycle) {
+                {
+                    Channel first;
+                    {
+                        Channel second;
+                        require(hostTaskCount == 1 && hostQueueCount == baselineQueues + 1, "channels did not share worker");
+                    }
+                    require(hostTaskCount == 1 && hostQueueCount == baselineQueues + 1, "worker stopped before last channel");
+                }
+                require(hostTaskCount == 0 && hostQueueCount == baselineQueues, "worker or queue leaked after shutdown");
+            }
+        } else if (name == "errors") {
             for (auto error : {BLE_HS_ENOMEM, BLE_HS_EAGAIN, BLE_HS_ENOTCONN}) {
                 Channel c;
                 int     sends   = 0;

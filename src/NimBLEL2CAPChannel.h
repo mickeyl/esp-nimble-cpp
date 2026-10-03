@@ -79,6 +79,11 @@ class NimBLEL2CAPChannel {
     uint16_t getConnHandle() const;
     /// @return True, if the channel is connected. False, otherwise.
     bool isConnected() const { return m_state.load() == State::open; }
+    // Stop accepting new connections before using this to drain a channel.
+    bool isIdle() const {
+        return m_state.load() == State::idle && !m_pendingDeferredReads.load() &&
+               !m_pendingHostJobs.load() && !m_writers.load();
+    }
 
     ~NimBLEL2CAPChannel();
 

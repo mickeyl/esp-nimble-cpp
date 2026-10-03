@@ -10,4 +10,4 @@ make test-l2cap SANITIZER=thread
 
 Clang, CMake and a C++17 compiler are required. Address builds also enable undefined-behavior checks. The deferred-callback configuration and an inline-callback build are both compiled.
 
-The fake radio does not validate ESP32 scheduling, RF behavior, controller credits or memory-pool sizing. Real-device transfer and disconnect tests remain necessary. Timeouts deliberately exercise the production two-second deadline. The host process owns its fake task/queue threads for its lifetime.
+The fake radio does not validate ESP32 scheduling, RF behavior, controller credits or memory-pool sizing. Real-device transfer and disconnect tests remain necessary. Timeouts deliberately exercise the production two-second deadline. The lifecycle cases repeatedly create and destroy channels and verify that the shared callback task and queue are released after the last channel.
