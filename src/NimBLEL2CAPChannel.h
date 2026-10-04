@@ -135,6 +135,18 @@ class NimBLEL2CAPChannel {
     static void disconnectOnHost(ble_npl_event* event);
     void dispatchCallback(uint8_t kind, std::vector<uint8_t>* data = nullptr);
 
+#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
+    std::atomic<uint32_t> m_txQueuedAt{0};
+    struct TxStats {
+        uint32_t sdus=0, bytes=0, stalls=0, errors=0;
+        uint32_t queueTotal=0, queueMax=0, sendTotal=0, sendMax=0;
+        uint32_t stallTotal=0, stallMax=0, creditMin=65535, creditMax=0;
+    } m_txStats; // Host task only, including disconnect callback.
+    uint32_t m_stalledAt=0;
+    bool m_measuringStall=false;
+    void logTxStats();
+#endif
+
     // Allocate / deallocate NimBLE memory pool
     bool setupMemPool();
     void teardownMemPool();

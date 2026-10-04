@@ -77,3 +77,10 @@ idf_component_register(
   PRIV_REQUIRES
     ${ESP_NIMBLE_PRIV_REQUIRES}
 )
+
+# Debug-only instrumentation tied to the pinned ESP-IDF NimBLE internals.
+if(CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS)
+    target_include_directories(${COMPONENT_LIB} PRIVATE
+        "$ENV{IDF_PATH}/components/bt/host/nimble/nimble/nimble/host/src")
+    target_link_libraries(${COMPONENT_LIB} PRIVATE idf::esp_timer)
+endif()

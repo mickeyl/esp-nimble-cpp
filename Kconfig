@@ -265,4 +265,11 @@ config NIMBLE_CPP_L2CAP_CALLBACK_QUEUE_LENGTH
 
 endif
 
+config NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
+    bool "Log L2CAP TX geometry, credits and host timing (pinned ESP-IDF only)"
+    default n
+    help
+        Debug instrumentation using private NimBLE channel fields on its host task.
+        Reports every 32 SDUs and on disconnect; timings are host submission, not RF delivery.
+
 endmenu

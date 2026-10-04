@@ -16,6 +16,23 @@
 #  include "nimble/nimble_port.h"
 # endif
 # include <algorithm>
+#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
+# include "ble_l2cap_priv.h"
+# include "esp_timer.h"
+# include "esp_log.h"
+
+void NimBLEL2CAPChannel::logTxStats() {
+    const auto& s = m_txStats;
+    if (!s.sdus) { return; }
+    ESP_LOGI("BLETx", "sdus=%lu bytes=%lu credits_min/max=%lu/%lu stalls=%lu errors=%lu queue_us_avg/max=%lu/%lu send_us_avg/max=%lu/%lu stall_us_total/max=%lu/%lu (host submission, not RF)",
+             (unsigned long)s.sdus, (unsigned long)s.bytes, (unsigned long)s.creditMin,
+             (unsigned long)s.creditMax, (unsigned long)s.stalls, (unsigned long)s.errors,
+             (unsigned long)(s.queueTotal/s.sdus), (unsigned long)s.queueMax,
+             (unsigned long)(s.sendTotal/s.sdus), (unsigned long)s.sendMax,
+             (unsigned long)s.stallTotal, (unsigned long)s.stallMax);
+    m_txStats = {};
+}
+#endif
 
 # ifdef USING_NIMBLE_ARDUINO_HEADERS
 #  include "nimble/nimble/host/include/host/ble_gap.h"
@@ -167,7 +184,33 @@ void NimBLEL2CAPChannel::transmitOnHost(ble_npl_event* event) {
     } else {
         // Arm before send. An immediate TX_UNSTALLED must not be discarded.
         ch->m_activeSend = ch->m_completion.get();
+#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
+        const uint32_t began = uint32_t(esp_timer_get_time());
+        auto& stats = ch->m_txStats;
+        const uint32_t queued = began - ch->m_txQueuedAt.load();
+        stats.sdus++;
+        stats.bytes += OS_MBUF_PKTLEN(buffer);
+        stats.queueTotal += queued;
+        stats.queueMax = std::max(stats.queueMax, queued);
+        const uint32_t creditsBefore = ch->channel->coc_tx.credits;
+        stats.creditMin = std::min(stats.creditMin, creditsBefore);
+        stats.creditMax = std::max(stats.creditMax, creditsBefore);
+#endif
         int rc = ble_l2cap_send(ch->channel, buffer);
+#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
+        const uint32_t elapsed = uint32_t(esp_timer_get_time()) - began;
+        stats.sendTotal += elapsed;
+        stats.sendMax = std::max(stats.sendMax, elapsed);
+        if (ch->channel) {
+            stats.creditMin = std::min(stats.creditMin, uint32_t(ch->channel->coc_tx.credits));
+        }
+        if (rc == BLE_HS_ESTALLED) {
+            stats.stalls++;
+            ch->m_stalledAt = uint32_t(esp_timer_get_time());
+            ch->m_measuringStall = ch->m_activeSend != nullptr;
+        } else if (rc) { stats.errors++; }
+        if (stats.sdus >= 32 && !ch->m_measuringStall) { ch->logTxStats(); }
+#endif
         // Pinned NimBLE consumes the SDU even on errors from continue_tx.
         // Only these two early returns leave ownership with the caller.
         if (rc == BLE_HS_EBADDATA || rc == BLE_HS_EBUSY) { os_mbuf_free_chain(buffer); }
@@ -297,6 +340,9 @@ int NimBLEL2CAPChannel::writeFragment(std::vector<uint8_t>::const_iterator begin
     m_txGeneration.store(m_generation.load());
     m_pendingHostJobs.fetch_add(1);
     m_txBuffer.store(buffer);
+#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
+    m_txQueuedAt.store(uint32_t(esp_timer_get_time()));
+#endif
     if (xTaskGetCurrentTaskHandle() == m_hostTask.load()) {
         transmitOnHost(&m_txEvent);
         // A host callback must never wait for host progress.
@@ -401,6 +447,13 @@ int NimBLEL2CAPChannel::handleConnectionEvent(struct ble_l2cap_event* event) {
                 info.peer_l2cap_mtu,
                 info.peer_coc_mtu);
     logPoolSanityWarning(LOG_TAG, psm, info);
+#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
+    m_txStats = {};
+    m_measuringStall = false;
+    ESP_LOGI("BLETx", "handle=%u tx_MPS=%u rx_MPS=%u peer_SDU_MTU=%u local_SDU_MTU=%u initial_tx_credits=%u",
+             getConnHandle(), channel->peer_coc_mps, channel->my_coc_mps,
+             info.peer_coc_mtu, info.our_coc_mtu, channel->coc_tx.credits);
+#endif
     if (info.our_coc_mtu > 0 && info.peer_coc_mtu > 0 && info.our_coc_mtu > info.peer_coc_mtu) {
         NIMBLE_LOGW(LOG_TAG, "L2CAP COC 0x%04X connected, but local MTU is bigger than remote MTU.", psm);
     }
@@ -493,6 +546,16 @@ int NimBLEL2CAPChannel::handleDataReceivedEvent(struct ble_l2cap_event* event) {
 
 int NimBLEL2CAPChannel::handleTxUnstalledEvent(struct ble_l2cap_event* event) {
     if (event->tx_unstalled.chan == channel && m_activeSend) {
+#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
+        if (m_measuringStall) {
+            const uint32_t elapsed = uint32_t(esp_timer_get_time()) - m_stalledAt;
+            m_txStats.stallTotal += elapsed;
+            m_txStats.stallMax = std::max(m_txStats.stallMax, elapsed);
+            m_measuringStall = false;
+            if (event->tx_unstalled.status) { m_txStats.errors++; }
+            if (m_txStats.sdus >= 32) { logTxStats(); }
+        }
+#endif
         m_activeSend->finish(event->tx_unstalled.status);
         m_activeSend = nullptr;
     }
@@ -501,6 +564,16 @@ int NimBLEL2CAPChannel::handleTxUnstalledEvent(struct ble_l2cap_event* event) {
 
 int NimBLEL2CAPChannel::handleDisconnectionEvent(struct ble_l2cap_event* event) {
     if (!channel || event->disconnect.chan != channel) { return 0; }
+#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
+    if (m_measuringStall) {
+        const uint32_t elapsed = uint32_t(esp_timer_get_time()) - m_stalledAt;
+        m_txStats.stallTotal += elapsed;
+        m_txStats.stallMax = std::max(m_txStats.stallMax, elapsed);
+        m_txStats.errors++;
+        m_measuringStall = false;
+    }
+    logTxStats();
+#endif
     // NimBLE invokes this while holding its host lock. Never wait or invoke
     // application cleanup here; that cleanup can join a producer using NimBLE.
     m_state.store(State::closing);
