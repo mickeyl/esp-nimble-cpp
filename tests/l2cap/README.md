@@ -26,3 +26,13 @@ Early synchronous completion may have zero measured stall duration.
 These are host submission timings, not controller completion or RF delivery.
 Logging itself adds overhead. The option requires the pinned IDF private header
 layout; it is intended for controlled debug comparisons, not production builds.
+
+`CONFIG_NIMBLE_CPP_L2CAP_ALIGN_TX_SDUS` (default off) is an A/B experiment.
+It uses the largest TX SDU width no greater than the negotiated width whose
+size plus the two SDU-length bytes is a multiple of the peer MPS. A smaller
+SDU that already fits in one peer PDU is unchanged. For macOS MTU/MPS 1251 this
+changes TX chunks from 1251 to 1249 bytes; for MTU 672/MPS 23 it chooses 665.
+The byte stream and negotiated MTU remain unchanged. This can reduce credit-based
+PDUs, but a latency/throughput benefit needs measurement on each peer. BLETx logs
+the effective width. Geometry tests cover the entire uint16 MTU range against
+representative MPS values, edge cases and the 4096-byte response decomposition.

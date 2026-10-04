@@ -265,6 +265,14 @@ config NIMBLE_CPP_L2CAP_CALLBACK_QUEUE_LENGTH
 
 endif
 
+config NIMBLE_CPP_L2CAP_ALIGN_TX_SDUS
+    bool "Align sent SDUs to peer MPS including SDU length (experimental)"
+    default n
+    help
+        Reduce the TX chunk width to avoid a small final credit-based PDU.
+        Uses peer MPS from the pinned ESP-IDF NimBLE private channel layout.
+        Does not change negotiated parameters or application byte ordering.
+
 config NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
     bool "Log L2CAP TX geometry, credits and host timing (pinned ESP-IDF only)"
     default n

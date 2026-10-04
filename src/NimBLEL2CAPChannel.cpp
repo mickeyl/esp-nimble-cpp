@@ -16,8 +16,11 @@
 #  include "nimble/nimble_port.h"
 # endif
 # include <algorithm>
-#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
+#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS || CONFIG_NIMBLE_CPP_L2CAP_ALIGN_TX_SDUS
 # include "ble_l2cap_priv.h"
+#endif
+# include "NimBLEL2CAPTxGeometry.h"
+#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
 # include "esp_timer.h"
 # include "esp_log.h"
 
@@ -395,7 +398,7 @@ bool NimBLEL2CAPChannel::write(const std::vector<uint8_t>& bytes) {
     if (xSemaphoreTake(m_writeMutex, wait) != pdTRUE) { disconnect(); return false; }
     struct Unlock { SemaphoreHandle_t mutex; ~Unlock() { xSemaphoreGive(mutex); } } unlock{m_writeMutex};
     if (!isConnected() || generation != m_generation.load()) { return false; }
-    const auto width = m_negotiatedMTU.load();
+    const auto width = m_txSduWidth.load();
     if (!width) { disconnect(); return false; }
     auto start = bytes.begin();
     while (start != bytes.end()) {
@@ -476,6 +479,14 @@ int NimBLEL2CAPChannel::handleConnectionEvent(struct ble_l2cap_event* event) {
     }
 
     m_negotiatedMTU.store(negotiatedMTU);
+    uint16_t txSduWidth = negotiatedMTU;
+#if CONFIG_NIMBLE_CPP_L2CAP_ALIGN_TX_SDUS
+    txSduWidth = nimbleL2capTxSduWidth(negotiatedMTU, channel->peer_coc_mps);
+#endif
+    m_txSduWidth.store(txSduWidth);
+#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
+    ESP_LOGI("BLETx", "negotiated_SDU_MTU=%u tx_SDU_width=%u", negotiatedMTU, txSduWidth);
+#endif
 #if CONFIG_NIMBLE_CPP_L2CAP_DEFERRED_READ_CALLBACKS
     dispatchCallback(Connected);
 #else

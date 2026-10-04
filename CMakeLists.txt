@@ -79,8 +79,10 @@ idf_component_register(
 )
 
 # Debug-only instrumentation tied to the pinned ESP-IDF NimBLE internals.
-if(CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS)
+if(CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS OR CONFIG_NIMBLE_CPP_L2CAP_ALIGN_TX_SDUS)
     target_include_directories(${COMPONENT_LIB} PRIVATE
         "$ENV{IDF_PATH}/components/bt/host/nimble/nimble/nimble/host/src")
+endif()
+if(CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS)
     target_link_libraries(${COMPONENT_LIB} PRIVATE idf::esp_timer)
 endif()

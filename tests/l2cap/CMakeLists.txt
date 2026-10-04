@@ -26,3 +26,8 @@ target_link_libraries(l2cap_inline_tests PRIVATE Threads::Threads)
 add_test(NAME l2cap_inline_errors COMMAND l2cap_inline_tests errors)
 
 add_test(NAME l2cap_inline_lifecycle COMMAND l2cap_inline_tests lifecycle)
+
+add_executable(l2cap_geometry_tests TxGeometryTests.cpp)
+target_compile_features(l2cap_geometry_tests PRIVATE cxx_std_17)
+target_include_directories(l2cap_geometry_tests PRIVATE ../../src)
+add_test(NAME l2cap_geometry COMMAND l2cap_geometry_tests)

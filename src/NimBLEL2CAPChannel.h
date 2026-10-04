@@ -118,6 +118,7 @@ class NimBLEL2CAPChannel {
     std::atomic<State> m_state{State::idle};
     std::atomic<uint32_t> m_generation{0};
     std::atomic<uint16_t> m_negotiatedMTU{0};
+    std::atomic<uint16_t> m_txSduWidth{0};
     std::atomic<uint16_t> m_connHandle{BLE_HS_CONN_HANDLE_NONE};
     std::atomic<uint32_t> m_pendingDeferredReads{0}; // includes running callbacks
     std::atomic<uint32_t> m_pendingHostJobs{0};
