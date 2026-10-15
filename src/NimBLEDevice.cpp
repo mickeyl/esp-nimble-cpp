@@ -54,6 +54,9 @@
 
 # if defined(ESP_PLATFORM) && defined(CONFIG_ENABLE_ARDUINO_DEPENDS)
 #  include "esp32-hal-bt.h"
+#  if __has_include("esp32-hal-bt-mem.h")
+#   include "esp32-hal-bt-mem.h"
+#  endif
 # endif
 
 # include "NimBLELog.h"
@@ -725,7 +728,7 @@ bool NimBLEDevice::onWhiteList(const NimBLEAddress& address) {
 bool NimBLEDevice::whiteListAdd(const NimBLEAddress& address) {
     if (!NimBLEDevice::onWhiteList(address)) {
         m_whiteList.push_back(address);
-        int rc = ble_gap_wl_set(reinterpret_cast<ble_addr_t*>(&m_whiteList[0]), m_whiteList.size());
+        int rc = ble_gap_wl_set(reinterpret_cast<ble_addr_t*>(m_whiteList.data()), m_whiteList.size());
         if (rc != 0) {
             NIMBLE_LOGE(LOG_TAG, "Failed adding to whitelist rc=%d", rc);
             m_whiteList.pop_back();
@@ -745,7 +748,7 @@ bool NimBLEDevice::whiteListRemove(const NimBLEAddress& address) {
     for (auto it = m_whiteList.begin(); it < m_whiteList.end(); ++it) {
         if (*it == address) {
             m_whiteList.erase(it);
-            int rc = ble_gap_wl_set(reinterpret_cast<ble_addr_t*>(&m_whiteList[0]), m_whiteList.size());
+            int rc = ble_gap_wl_set(reinterpret_cast<ble_addr_t*>(m_whiteList.data()), m_whiteList.size());
             if (rc != 0) {
                 m_whiteList.push_back(address);
                 NIMBLE_LOGE(LOG_TAG, "Failed removing from whitelist rc=%d", rc);
@@ -753,6 +756,10 @@ bool NimBLEDevice::whiteListRemove(const NimBLEAddress& address) {
             }
 
             std::vector<NimBLEAddress>(m_whiteList).swap(m_whiteList);
+            break; // `it` was invalidated by erase() and its buffer freed by the
+                   // swap above; continuing would iterate a dangling iterator.
+                   // Duplicates are impossible (whiteListAdd checks onWhiteList),
+                   // so a single match is total.
         }
     }
 
@@ -1034,6 +1041,11 @@ bool NimBLEDevice::deinit(bool clearAll) {
                 m_pL2CAPServer = nullptr;
             }
 # endif
+# if MYNEWT_VAL(BLE_ROLE_OBSERVER)
+            if (NimBLEDevice::m_pScan != nullptr) {
+                NimBLEDevice::m_pScan->onHostDeinit();
+            }
+# endif
             nimble_port_deinit();
 # ifndef USING_NIMBLE_ARDUINO_HEADERS
 #  if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 0, 0)
@@ -1045,6 +1057,9 @@ bool NimBLEDevice::deinit(bool clearAll) {
 # endif
             m_initialized = false;
             m_synced      = false;
+        } else {
+            NIMBLE_LOGE(LOG_TAG, "nimble_port_stop() failed with error: %d", rc);
+            return false;
         }
     }
 
@@ -1081,6 +1096,8 @@ bool NimBLEDevice::deinit(bool clearAll) {
             deleteClient(clt);
         }
 # endif
+
+        NimBLEUtils::deleteTaskSems();
     }
 
     return rc == 0;

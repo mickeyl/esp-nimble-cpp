@@ -24,6 +24,8 @@
 # undef max
 /**************************/
 
+# include "NimBLEUtils.h"
+
 # include <vector>
 # include <atomic>
 # include <memory>
