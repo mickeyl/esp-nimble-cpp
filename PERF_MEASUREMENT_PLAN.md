@@ -1,6 +1,22 @@
 # L2CAP CoC Performance Measurement Plan
 
-Status: draft for discussion. Nothing in here is implemented yet.
+Status (2026-10-16): echo/request, streaming in both directions, duplex,
+reconnect cycles, heap trends and TX-log parsing are implemented. See
+[the first baseline](PERF_BASELINE_2026-10-16.md) and
+[the streaming/reconnect checkpoint](PERF_STREAMING_2026-10-16.md) for measured
+scope and remaining gates. After operator authorization, the archived final Mac
+peer also passed both-chip matrix/recovery runs, with 210 reconnect stress
+cycles in total. iPhone and product acceptance remain subsequent
+phases. Operator entry points: `examples/L2CAP/L2CAP_Bench/README.md` and
+`tools/l2cap-bench/README.md`.
+
+Implemented runner commands are `run` and `compare`; `--peer-port` configures
+the second ESP, `--dut-role peripheral` selects product GAP roles and `--cycles`
+repeats connect/run/disconnect. The `matrix`/`esp-pair` command names below are
+planned conveniences, not implemented commands. Short heap trends do not
+constitute an hour/day-scale endurance test. An opt-in HCI-backpressure candidate
+was added after streaming reproduced native ENOMEM; library defaults and the
+ECOS product pin remain unchanged.
 
 ## 1. Goal
 
@@ -8,11 +24,12 @@ Measure and compare L2CAP connection-oriented channel (CoC) performance of
 esp-nimble-cpp on the ESP32-S31 (primary) and ESP32-S3 (regression guard), with
 these peers in order of priority:
 
-1. iPhone (CoreBluetooth), because of ECOS.
+1. Apple/CoreBluetooth: macOS on mond first, then iPhone, as agreed on October 16.
+   iPhone remains the product reference for ECOS.
 2. ESP32 peer (ESP <-> ESP), because it must work well too and because it is the
    only fully scriptable pair.
-3. macOS (CoreBluetooth CLI), as a convenient but not equivalent stand-in for the
-   iPhone.
+
+macOS results are useful but are not equivalent to iPhone results.
 
 The result must let us answer, with numbers and repeatable procedure:
 
@@ -21,16 +38,20 @@ The result must let us answer, with numbers and repeatable procedure:
 - Did a change regress the S3 while improving the S31?
 - Where does the time go for the ECOS workload: small request, large response?
 
-## 2. Existing assets and what they are good for
+## 2. Starting assets and what they were good for
 
 | Asset | Location | Useful for | Limits |
 | --- | --- | --- | --- |
 | Ping-pong examples (server + client) | `examples/L2CAP/` | ESP <-> ESP and ESP <-> BLE-Testing-iOS echo RTT and goodput | Human-readable printf only, one traffic pattern, S3 sdkconfig, server assumes one SDU equals one frame |
 | BLE-Testing-iOS | `~/Documents/late/BLE-Testing-iOS` | iPhone echo peer, same frame format as the examples | iOS 18.2 app without git, no export, metrics only on screen, needs manual target name change |
 | core-bluetooth-tool | `~/Documents/late/core-bluetooth-tool` | macOS streaming client and sink | One-way streaming only, never drains replies, no JSON |
-| ECOS diagnostic benchmark | `tpe/adapter/ecos-master/testing/ble_diagnostics/` plus `DiagnosticBenchmark.swift` | The real workload on the real S31 firmware: 8/32-byte request, 32..4096-byte response, JSON output with firmware dispatch and prepare times | Needs the full product firmware, S31 debug build only, one peer type per run, cannot A/B library Kconfig knobs quickly, no ESP <-> ESP |
+| ECOS diagnostic benchmark | `tpe/adapter/ecos/testing/ble_diagnostics/` plus `DiagnosticBenchmark.swift` | The real workload on the real S31 firmware: 8/32-byte request, 32..4096-byte response, JSON output with firmware dispatch and prepare times | Needs the full product firmware, S31 debug build only, one peer type per run, cannot A/B library Kconfig knobs quickly, no ESP <-> ESP |
 | TX diagnostics (`CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS`) | `src/NimBLEL2CAPChannel.cpp` | Credits, stalls, host submission timing per 32 SDUs | Log lines, not yet machine-parsed |
-| ESPenlaub hwtest | `~/Documents/late/ESPenlaub/examples/hwtest` | Console command pattern, IDF console wrapper | No BLE at all, S3-only configs, 8 MB flash, 30+ peripheral drivers that must compile on a preview target, no automation |
+| ESPenlaub hwtest | `~/Documents/late/ESPenlaub/examples/hwtest` | Console command pattern, IDF console wrapper; now also S31 LIS2DW12 tests | No BLE measurement infrastructure, 30+ peripheral drivers, no BLE automation |
+
+The table describes the starting point before this experiment. The new
+`l2cap-reflect` command and benchmark runner now implement bidirectional streams,
+JSON evidence and TX-log parsing; see the linked checkpoint reports.
 
 Measurements already recorded for the S31 in the ECOS board README
 (`boards/s31coreboard/README.md`): roughly 45 KiB/s with 128-byte MSYS-1 blocks
@@ -74,6 +95,20 @@ results are collected on the DUT and emitted over serial. Consequences:
 The reflector also runs on the DUT side, so ESP <-> ESP works with the same
 firmware in both roles, selected at runtime.
 
+Application role and GAP role are independent. Record them explicitly. The
+ECOS-representative path is Apple Central opening CoC to an ESP Peripheral;
+the ESP can still orchestrate every benchmark message. The initial reverse-role
+measurements (ESP Central, Apple Peripheral) are retained as a separate baseline.
+The Mac reflector supports both publication and `--connect`, and the DUT supports
+both `connect` and `listen`/`await` without changing the wire protocol.
+
+Traffic sizes are relative to the DUT. An 8→4096 DUT exchange loads Apple→ESP;
+4096→32 loads ESP→Apple. Measure both directions before assessing an ESP TX knob.
+The ECOS acceptance harness remains the test of actual Apple-initiated product
+requests. Record accepted link parameters per run; initial S31 interval requests
+can collide and need the same delayed retry as ECOS. Controlled A/B runs use
+`--require-params` so a 30 ms fallback cannot be mistaken for a library slowdown.
+
 ### 4.2 Wire protocol
 
 Stream-based framing on all sides. CoreBluetooth exposes the channel as a byte
@@ -91,12 +126,17 @@ Types:
 | `0x01 HELLO` | DUT -> peer | Protocol version, DUT identity (target, firmware hash). Peer answers with `0x81` carrying its identity (OS and version, device model). |
 | `0x02 CONFIG` | DUT -> peer | Pattern, request size, response size, count. Peer answers `0x82` ack. |
 | `0x03 PING` | DUT -> peer | `[seq u32][token u32][pattern bytes]`. Peer answers `0x83` with the same seq and token and a response of the configured size. Covers echo (response size equals request size) and asymmetric request/response. |
-| `0x04 STREAM` | DUT -> peer | `[seq u32][pattern]`. Peer does not answer per frame. |
-| `0x05 STREAM_END` | DUT -> peer | Peer answers `0x85` with received frame count, byte count, first and last receive timestamps in its own clock. |
-| `0x06 SINK` | DUT -> peer | Asks the peer to stream `count` frames of `size` to the DUT. Peer streams `0x04` frames and finishes with `0x05`. |
+| `0x04 STREAM` | either enabled direction | `[seq u32][token u32][pattern]`. No per-frame ACK. |
+| `0x05 STREAM_END` | either sender -> receiver | Token and announced count. `0x85` receipt carries token, count, bytes, errors and local first/last arrival times. |
+| `0x06 START` | DUT -> peer | Token; peer arms its receiver and echoes `0x86` before enabled peer TX starts. |
+| `0x07 FINISH` | DUT -> peer | Token; `0x87` confirms that every enabled direction and receipt completed. |
 | `0x7F ABORT` | either | Stop everything. |
 
-Response frames carry the peer's receive-to-send turnaround in microseconds,
+The exact version-2 layouts are in the firmware README. CONFIG patterns are
+1 echo, 2 request, 3 stream-tx, 4 stream-rx, 5 duplex. Both firmware and peer
+require HELLO version 2.
+
+PING response frames carry the peer's receive-to-send turnaround in microseconds,
 so the DUT can subtract reflector processing from RTT. Peer clocks are never
 compared with the DUT clock; only durations measured on one side are used.
 
@@ -114,8 +154,10 @@ compared with the DUT clock; only durations measured on one side are used.
 ### 4.4 Metrics per run
 
 - RTT: median, p95, min, max, mean, in microseconds from `esp_timer`.
-- Goodput (payload bytes per second) and link throughput (both directions).
-- Time to first byte of the response, where the pattern has a response.
+- Goodput (application bytes per second) and framed throughput in both
+  directions. Physical BLE throughput is not observable from these APIs.
+- Time to the first response callback. NimBLE delivers whole SDUs, so this is
+  not a physical first-byte measurement; retain that distinction in reports.
 - TX diagnostics when enabled: stall count, stall time, credit min/max, host
   queue delay, `ble_l2cap_send` duration. The existing `BLETx` log lines are
   parsed by the runner; no change to the diagnostics format is needed at first.
@@ -194,8 +236,8 @@ in the ECOS board README.
 
 - `logTxStats` output stays, but gets a parse-stable format. Consider emitting
   it as the same `BENCH ` JSON line when the bench firmware is the consumer.
-- No other library changes for measurement. Anything else is a candidate under
-  test, not infrastructure.
+- The optional HCI-backpressure change is a candidate under test, separate from
+  instrumentation. No library default changes follow from a bench result alone.
 
 ## 6. Measurement matrix
 
@@ -236,8 +278,8 @@ with the iPhone and with an ESP peer, before any knob is touched.
    reflector mode. Baseline matrix for S31 and S3 against the iPhone.
 5. **Knob matrix.** Run section 6, record in `results/`, write findings into
    this file and into the ECOS board README where they affect the product.
-6. **Acceptance.** Bump the esp-nimble-cpp submodule in ECOS (currently at
-   `3f46607`, before the upstream merge) and re-run
+6. **Acceptance.** Bump the esp-nimble-cpp submodule in ECOS (tracked by
+   `28a9b77` at `d8a7ec2`, including the upstream merge) and re-run
    `testing/ble_diagnostics/benchmark.py` with the chosen configuration.
 
 Phases 1 and 3 are pure esp-nimble-cpp work. Phases 2 and 4 touch other repos.
@@ -251,9 +293,10 @@ Phases 1 and 3 are pure esp-nimble-cpp work. Phases 2 and 4 touch other repos.
 - **Peer MPS from the public API.** Not available; the alignment knob needs the
   private header. Decide later whether that is acceptable for production or
   whether to ask upstream for `peer_coc_mps` in `ble_l2cap_chan_info`.
-- **Hardware at hand.** No ESP board was attached while writing this. We need
-  at least two S3 boards and one S31 board on USB at the same time for ESP <->
-  ESP and the S31 run, and the runner must address them by port.
+- **Hardware at hand (October 16).** S3(1) and the S31 coreboard are attached
+  by USB and selected by stable serial paths. They cover both Apple baselines
+  and S3↔S31. A second S3 is still needed for an S3↔S3 reference pair. S3(1)
+  and mond are approximately 1 m apart with a glass pane and no wall.
 - **S31 as IDF preview target.** IDF v6.1 at `~/Documents/late/misc/esp-idf`
   builds it today. Pin the IDF commit in the result metadata, because the S31
   controller library can change between IDF updates and shift all numbers.

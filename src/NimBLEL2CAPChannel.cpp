@@ -19,6 +19,12 @@
 #if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS || CONFIG_NIMBLE_CPP_L2CAP_ALIGN_TX_SDUS
 # include "ble_l2cap_priv.h"
 #endif
+#if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
+# include "ble_hs_conn_priv.h"
+# include "ble_hs_priv.h"
+// Internal result: no bytes from this SDU were submitted to NimBLE.
+static constexpr int WaitingForControllerBacklog = -1001;
+#endif
 # include "NimBLEL2CAPTxGeometry.h"
 #if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
 # include "esp_timer.h"
@@ -185,6 +191,21 @@ void NimBLEL2CAPChannel::transmitOnHost(ble_npl_event* event) {
         os_mbuf_free_chain(buffer);
         ch->m_completion->finish(BLE_HS_ENOTCONN);
     } else {
+#if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
+        // Peer CoC credits do not bound the local HCI packet queue. Inspect it
+        // on the host while locked, before ble_l2cap_send can consume any data.
+        ble_hs_lock_nested();
+        auto* connection = ble_hs_conn_find(ch->getConnHandle());
+        const bool backedUp = connection && (!STAILQ_EMPTY(&connection->bhc_tx_q) ||
+            connection->bhc_outstanding_pkts >= CONFIG_NIMBLE_CPP_L2CAP_HCI_TX_WINDOW);
+        ble_hs_unlock_nested();
+        if (backedUp) {
+            os_mbuf_free_chain(buffer);
+            ch->m_completion->finish(WaitingForControllerBacklog);
+            ch->m_pendingHostJobs.fetch_sub(1);
+            return;
+        }
+#endif
         // Arm before send. An immediate TX_UNSTALLED must not be discarded.
         ch->m_activeSend = ch->m_completion.get();
 #if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
@@ -334,8 +355,18 @@ void NimBLEL2CAPChannel::teardownMemPool() {
 }
 
 int NimBLEL2CAPChannel::writeFragment(std::vector<uint8_t>::const_iterator begin, std::vector<uint8_t>::const_iterator end) {
+#if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
+    const auto began = xTaskGetTickCount();
+    const bool onHost = xTaskGetCurrentTaskHandle() == m_hostTask.load();
+    while (true) {
+        if (!isConnected()) return BLE_HS_ENOTCONN;
+        if (TickType_t(xTaskGetTickCount() - began) >= pdMS_TO_TICKS(SendTimeoutMs)) return BLE_HS_ETIMEOUT;
+#endif
     auto* buffer = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
-    if (!buffer) { return BLE_HS_ENOMEM; }
+    if (!buffer) {
+        NIMBLE_LOGE(LOG_TAG, "TX SDU buffer exhausted before submission");
+        return BLE_HS_ENOMEM;
+    }
     int rc = os_mbuf_append(buffer, &*begin, end - begin);
     if (rc) { os_mbuf_free_chain(buffer); return rc; }
     auto* completion = m_completion.get();
@@ -353,9 +384,27 @@ int NimBLEL2CAPChannel::writeFragment(std::vector<uint8_t>::const_iterator begin
     } else {
         // At most one TX event and one disconnect event are outstanding per channel.
         ble_npl_eventq_put(nimble_port_get_dflt_eventq(), &m_txEvent);
-        if (xSemaphoreTake(completion->ready, pdMS_TO_TICKS(SendTimeoutMs)) != pdTRUE) { return BLE_HS_ETIMEOUT; }
+        TickType_t waitTicks = pdMS_TO_TICKS(SendTimeoutMs);
+#if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
+        const auto elapsed = TickType_t(xTaskGetTickCount() - began);
+        waitTicks = elapsed < waitTicks ? waitTicks - elapsed : 0;
+#endif
+        if (xSemaphoreTake(completion->ready, waitTicks) != pdTRUE) { return BLE_HS_ETIMEOUT; }
     }
-    return completion->status.load();
+    const int status = completion->status.load();
+#if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
+    if (status == WaitingForControllerBacklog) {
+        if (onHost) return BLE_HS_EBUSY;
+        if (TickType_t(xTaskGetTickCount() - began) >= pdMS_TO_TICKS(SendTimeoutMs)) return BLE_HS_ETIMEOUT;
+        // Active backpressure only: no idle polling and no pause on an empty queue.
+        vTaskDelay(1);
+        continue;
+    }
+#endif
+    return status;
+#if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
+    }
+#endif
 }
 
 # if MYNEWT_VAL(BLE_ROLE_CENTRAL)
@@ -405,7 +454,12 @@ bool NimBLEL2CAPChannel::write(const std::vector<uint8_t>& bytes) {
         if (!isConnected()) { return false; }
         const auto length = std::min<size_t>(width, bytes.end() - start);
         auto end = start + length;
-        if (writeFragment(start, end) != 0) { disconnect(); return false; }
+        const int rc = writeFragment(start, end);
+        if (rc != 0) {
+            NIMBLE_LOGE(LOG_TAG, "TX failed rc=%d offset=%u length=%u total=%u", rc,
+                        unsigned(start - bytes.begin()), unsigned(length), unsigned(bytes.size()));
+            disconnect(); return false;
+        }
         start = end;
     }
     return true;

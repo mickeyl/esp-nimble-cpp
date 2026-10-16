@@ -64,11 +64,14 @@ class NimBLEL2CAPChannel {
     /// @brief Write data to the channel.
     ///
     /// If the size of the data exceeds the MTU, the data will be split into multiple fragments.
-    /// @return true on success, after the data has been sent.
+    /// @return true after complete host submission/credit progress. This does
+    /// not prove that the remote application has consumed the data.
     /// @return false, if the data can't be sent.
     ///
     /// Whole writes are serialized. Credit waits are bounded; an incomplete write
     /// aborts the connection. Call from a worker task for blocking operation.
+    /// Optional HCI backpressure waits only before submission; actual send
+    /// errors never retry a partially submitted SDU.
     /// Owners must disconnect and let callbacks finish before deleting a channel.
     bool write(const std::vector<uint8_t>& bytes);
 

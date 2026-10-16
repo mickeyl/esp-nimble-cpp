@@ -14,6 +14,7 @@
 #define CONFIG_NIMBLE_CPP_L2CAP_CALLBACK_QUEUE_LENGTH    4
 #define CONFIG_NIMBLE_CPP_L2CAP_CALLBACK_TASK_STACK_SIZE 4096
 #define CONFIG_NIMBLE_CPP_L2CAP_CALLBACK_TASK_PRIORITY   5
+#define CONFIG_NIMBLE_CPP_L2CAP_HCI_TX_WINDOW 8
 #define CONFIG_NIMBLE_CPP_L2CAP_SDU_BUFFER_COUNT         6
 #define MYNEWT_VAL(x)                                    MYNEWT_VAL_##x
 #define MYNEWT_VAL_BLE_L2CAP_COC_MAX_NUM                 2
@@ -74,6 +75,10 @@ inline void vSemaphoreDelete(SemaphoreHandle_t s) {
 }
 inline void vTaskDelay(uint32_t ms) {
     std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+}
+inline TickType_t xTaskGetTickCount() {
+    return TickType_t(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 inline void ble_npl_time_delay(uint32_t ms) {
     vTaskDelay(ms);

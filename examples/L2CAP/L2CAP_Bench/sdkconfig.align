@@ -1,0 +1,2 @@
+# Single-knob candidate against sdkconfig.defaults.
+CONFIG_NIMBLE_CPP_L2CAP_ALIGN_TX_SDUS=y

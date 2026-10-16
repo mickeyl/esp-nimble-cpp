@@ -2,6 +2,9 @@
 #include <future>
 #include <iostream>
 #include <stdexcept>
+#if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
+#include "ble_hs_conn_priv.h"
+#endif
 using namespace std::chrono_literals;
 static void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
@@ -76,6 +79,42 @@ struct Channel : NimBLEL2CAPChannel {
 int main(int argc, char** argv) {
     try {
         const std::string name = argc > 1 ? argv[1] : "errors";
+#if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
+        if (name == "backpressure_host") {
+            Channel c; int sends = 0;
+            hostSend = [&](os_mbuf* b) { ++sends; delete b; return 0; };
+            hostConnection.bhc_tx_q.pending = true;
+            const auto began = std::chrono::steady_clock::now();
+            onHost([&] { require(!c.write(std::vector<uint8_t>(20, 0x55)), "host callback waited for backlog"); });
+            require(sends == 0 && std::chrono::steady_clock::now() - began < 500ms, "host callback blocked host progress");
+            hostConnection.bhc_tx_q.pending = false;
+            return 0;
+        }
+        if (name == "backpressure" || name == "backpressure_window") {
+            Channel c; std::atomic<int> sends{0};
+            hostSend = [&](os_mbuf* b) { ++sends; delete b; return 0; };
+            if (name == "backpressure_window") hostConnection.bhc_outstanding_pkts = CONFIG_NIMBLE_CPP_L2CAP_HCI_TX_WINDOW;
+            else hostConnection.bhc_tx_q.pending = true;
+            auto writer = std::async(std::launch::async, [&] { return c.write(std::vector<uint8_t>(20, 0x55)); });
+            require(writer.wait_for(30ms) == std::future_status::timeout && sends == 0, "submitted while HCI was backed up");
+            hostConnection.bhc_tx_q.pending = false;
+            hostConnection.bhc_outstanding_pkts = 0;
+            require(writer.get() && sends == 3, "backlog drain did not submit each fragment exactly once");
+            return 0;
+        }
+        if (name == "backpressure_disconnect" || name == "backpressure_timeout") {
+            Channel c; std::atomic<int> sends{0};
+            hostSend = [&](os_mbuf* b) { ++sends; delete b; return 0; };
+            hostConnection.bhc_tx_q.pending = true;
+            auto writer = std::async(std::launch::async, [&] { return c.write(std::vector<uint8_t>(20, 0x55)); });
+            require(writer.wait_for(30ms) == std::future_status::timeout, "backpressure did not wait");
+            if (name == "backpressure_disconnect") c.disconnected();
+            require(writer.wait_for(2500ms) == std::future_status::ready && !writer.get() && sends == 0,
+                    "backpressure did not stop on disconnect/deadline without submitting data");
+            hostConnection.bhc_tx_q.pending = false;
+            return 0;
+        }
+#endif
         if (name == "lifecycle") {
             nimble_port_get_dflt_eventq();
             const int baselineQueues = hostQueueCount.load();

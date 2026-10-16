@@ -273,4 +273,26 @@ config NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
         Debug instrumentation using private NimBLE channel fields on its host task.
         Reports every 32 SDUs and on disconnect; timings are host submission, not RF delivery.
 
+config NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
+    bool "Bound L2CAP TX backlog before SDU submission (experimental, pinned IDF)"
+    default n
+    help
+        Wait for HCI ACL backlog and outstanding-packet pressure before
+        submitting another SDU. Prevents unbounded host packet buffering when peer CoC credits are
+        much larger than local pools. Uses the pinned NimBLE private connection
+        layout. Only worker writers wait, using the existing send deadline;
+        host callbacks never wait. A failed or partially submitted SDU is never
+        retried. This option is experimental pending Apple/ESP/product tests.
+
+config NIMBLE_CPP_L2CAP_HCI_TX_WINDOW
+    int "Outstanding HCI ACL threshold before starting another SDU"
+    depends on NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
+    range 1 64
+    default 8
+    help
+        Also pause before a new SDU when this many ACL packets are outstanding
+        on the controller. One SDU can add several packets, so this is a start
+        threshold, not a hard cap on the total packet count. This is an explicit
+        resource window, not a connection-interval or radio-latency assumption.
+
 endmenu
