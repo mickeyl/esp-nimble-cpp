@@ -280,9 +280,7 @@ inline QueueHandle_t nimble_port_get_dflt_eventq() {
     }();
     return q;
 }
-inline std::atomic<int> hostEventsQueued{0};
 inline void ble_npl_eventq_put(QueueHandle_t q, ble_npl_event* e) {
-    ++hostEventsQueued;
     const auto queued = xQueueSend(q, &e, 0);
     assert(queued == pdTRUE);
     (void)queued;

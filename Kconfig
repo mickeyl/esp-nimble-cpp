@@ -290,10 +290,12 @@ config NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
         keep native send semantics, including resource exhaustion risks.
         Use a worker for sustained TX. An untouched SDU is retained while waiting;
         a failed or partially submitted native SDU is never retried.
-        Readiness is checked under the native lock on the worker after a blocked
-        preflight, with one RTOS tick between checks (1 ms at 1000 Hz, 10 ms at
-        100 Hz). No idle polling. Tick granularity and lock contention may affect
-        throughput. This option remains experimental, validated on pinned IDF 6.1.
+        Readiness stays on the host, with one RTOS tick between worker retries
+        (1 ms at 1000 Hz, 10 ms at 100 Hz). Each retry still uses a host event
+        and completion semaphore. The worker never takes the native global
+        mutex, whose lock function has no bounded timeout. No idle polling.
+        Tick granularity and host scheduling may affect throughput. This option
+        remains experimental, validated on pinned IDF 6.1.
 
 config NIMBLE_CPP_L2CAP_HCI_TX_WINDOW
     int "Outstanding HCI ACL threshold before starting another SDU"

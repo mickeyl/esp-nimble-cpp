@@ -103,7 +103,14 @@ int main(int argc, char** argv) {
             Channel c;
             std::promise<void> entered, release;
             auto gate = release.get_future().share();
-            hostBeforeConnectionLookup = [&] { entered.set_value(); gate.wait(); };
+            std::thread::id nativeThread, lookupThread;
+            onHost([&] { nativeThread = std::this_thread::get_id(); });
+            int lookups = 0;
+            // Block the readiness check AFTER the first busy result. A worker
+            // must never enter the native global lock with an unbounded wait.
+            hostBeforeConnectionLookup = [&] {
+                if (++lookups == 2) { lookupThread = std::this_thread::get_id(); entered.set_value(); gate.wait(); }
+            };
             hostConnection.bhc_tx_q.pending = true;
             hostDisconnects = 0;
             int sends = 0;
@@ -114,7 +121,7 @@ int main(int argc, char** argv) {
             release.set_value();
             const bool success = writer.get();
             onHost([] {});
-            require(timedOut && !success && sends == 0 && hostDisconnects == 1 && liveMbufs == 0,
+            require(timedOut && lookupThread == nativeThread && !success && sends == 0 && hostDisconnects == 1 && liveMbufs == 0,
                     "late blocked preflight leaked or sent a timed-out SDU");
             hostBeforeConnectionLookup = {};
             hostConnection.bhc_tx_q.pending = false;
@@ -151,12 +158,10 @@ int main(int argc, char** argv) {
             if (name == "backpressure_window") hostConnection.bhc_outstanding_pkts = CONFIG_NIMBLE_CPP_L2CAP_HCI_TX_WINDOW;
             else hostConnection.bhc_tx_q.pending = true;
             hostMbufAllocations = hostMbufAppends = 0;
-            const int queuedBefore = hostEventsQueued.load();
             auto writer = std::async(std::launch::async, [&] { return c.write(std::vector<uint8_t>(20, 0x55)); });
             require(writer.wait_for(30ms) == std::future_status::timeout && sends == 0, "submitted while HCI was backed up");
             require(hostMbufAllocations == 1 && hostMbufAppends == 1 && liveMbufs == 1,
                     "waiting repeatedly allocated/copied instead of retaining the untouched SDU");
-            require(hostEventsQueued == queuedBefore + 1, "waiting queued a host event on every tick");
             hostConnection.bhc_tx_q.pending = false;
             hostConnection.bhc_outstanding_pkts = 0;
             require(writer.get() && sends == 3, "backlog drain did not submit each fragment exactly once");

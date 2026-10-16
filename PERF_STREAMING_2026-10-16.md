@@ -607,14 +607,18 @@ existing upstream PR branches were not changed.
 
 3. **Confirmed and reduced: active wait overhead.**
    One mbuf is allocated/copied per SDU and retained across blocked preflights.
-   After a host preflight declines, the worker polls readiness under the native
-   lock, with no new host event, allocation or copy while it remains blocked.
-   A final host check still closes the gap between worker observation and
-   native submission. Timeout/disconnect safely reclaim untouched buffers,
+   Readiness checks remain on the host, using an event and completion semaphore
+   per attempt. Only the allocation/copy cost is removed; the scheduling cost
+   remains to be measured. Moving the global native lock onto the worker was
+   rejected after inspecting ble_hs_lock_nested: it calls ble_npl_mutex_pend
+   with 0xffffffff and could defeat the existing bounded send wait. The worker
+   therefore only delays one tick and waits for host completion within its
+   remaining deadline. Timeout/disconnect safely reclaim untouched buffers,
    including a host preflight that returns after the writer timed out.
    Actual native failures still abort after one attempt; no partial-SDU retry
-   was introduced. Tests count allocations, appends and queued events and
-   check retained-buffer cleanup. Tick rate is documented (1 ms at 1000 Hz,
+   was introduced. Tests count allocations/appends, check retained-buffer
+   cleanup and require readiness lookups to stay on the host, including a
+   blocked second preflight after the first busy result. Tick rate is documented (1 ms at 1000 Hz,
    10 ms at 100 Hz). Optional diagnostics expose cumulative attempted SDUs,
    wait ticks, maximum waits per SDU and host bypasses, without changing the
    non-diagnostic fast path. CPU load and energy savings remain unmeasured.

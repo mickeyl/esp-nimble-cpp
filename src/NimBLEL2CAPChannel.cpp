@@ -403,25 +403,12 @@ int NimBLEL2CAPChannel::writeFragment(std::vector<uint8_t>::const_iterator begin
         ~PendingBufferExit() { if (auto* b = buffer.exchange(nullptr)) os_mbuf_free_chain(b); }
     } release{m_txBuffer};
 #if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
-    bool waitingForBacklog = false;
 #if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
     uint32_t waits = 0;
 #endif
     while (true) {
         if (!isConnected()) return BLE_HS_ENOTCONN;
         if (TickType_t(xTaskGetTickCount() - began) >= pdMS_TO_TICKS(SendTimeoutMs)) return BLE_HS_ETIMEOUT;
-        // After the host declines submission, check readiness on the worker
-        // under the native lock. No allocation, copy or host event per tick.
-        if (waitingForBacklog && controllerBackedUp(getConnHandle())) {
-#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
-            ++waits;
-            m_backpressureWaits.fetch_add(1);
-            // One writer owns this channel; the host only reads these totals.
-            m_backpressureWaitMax.store(std::max(m_backpressureWaitMax.load(), waits));
-#endif
-            vTaskDelay(1);
-            continue;
-        }
 #endif
     auto* completion = m_completion.get();
     completion->reset();
@@ -446,7 +433,15 @@ int NimBLEL2CAPChannel::writeFragment(std::vector<uint8_t>::const_iterator begin
     const int status = completion->status.load();
 #if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
     if (status == WaitingForControllerBacklog) {
-        waitingForBacklog = true;
+#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
+        ++waits;
+        m_backpressureWaits.fetch_add(1);
+        // One writer owns this channel; the host only reads these totals.
+        m_backpressureWaitMax.store(std::max(m_backpressureWaitMax.load(), waits));
+#endif
+        // Retain the untouched SDU. Readiness stays on the host: taking its
+        // global mutex here could block beyond this worker's send deadline.
+        vTaskDelay(1);
         continue;
     }
 #endif

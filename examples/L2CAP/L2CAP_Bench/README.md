@@ -197,10 +197,12 @@ a threshold for starting another SDU, not a hard total packet cap because one
 SDU can add several ACL packets. If backed up or at that threshold,
 that SDU is not submitted; a worker waits one RTOS tick and checks again, within
 the existing send deadline. The untouched mbuf is retained. After a blocked
-host preflight, the worker checks readiness under the native lock without
-allocating/copying again or queuing a host event per tick. Submission is still
-checked again on the host. One tick is 1 ms at 1000 Hz and 10 ms at 100 Hz;
-when ready there is no deliberate wait. There is no idle poller.
+host preflight, the worker waits one tick and queues another host check,
+without allocating or copying again. The host event and completion-semaphore
+cost remain. The worker must not take the native global mutex: its lock function
+waits indefinitely and could defeat the existing send deadline. One tick is
+1 ms at 1000 Hz and 10 ms at 100 Hz; when ready there is no deliberate wait.
+There is no idle poller.
 
 Host-callback writes bypass the preflight and retain native send semantics,
 including native resource/credit failures. Sustained TX must use a worker.
