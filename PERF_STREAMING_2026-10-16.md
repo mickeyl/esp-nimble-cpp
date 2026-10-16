@@ -11,7 +11,7 @@ forced-disconnect/recovery tests passed on both chips. There are now 210
 explicit reconnect stress cycles. The final archived peer is identified below;
 iPhone, long endurance and production acceptance were open at that checkpoint.
 The later resource/iPhone checkpoint at the end records subsequent acceptance
-and the running hour-scale test.
+and the completed hour-scale test.
 
 ## Finding: CoC credits do not bound native HCI backlog
 
@@ -55,7 +55,8 @@ partially submitted SDU into a retry.
 This is an experimental candidate using the pinned private IDF connection
 layout, not a default change or a universal guarantee for arbitrary buffer
 sizes, other radios or multiple channels. It requires enough resources for one
-SDU and still needs iPhone and production ECOS acceptance. Unit tests cover
+SDU. iPhone acceptance is recorded below; production ECOS acceptance remains
+open. Unit tests cover
 backlog/drain, deadline, disconnect, host-callback nonblocking behavior and the
 unchanged rule that actual send errors abort after one attempt.
 
@@ -519,32 +520,49 @@ baseline/window-off resource-failure reproductions. Successful captures contain
 DATA frames and 66 completed connections. Each captured firmware identity maps
 to an archived ELF. Raw peer/device identities and signed apps stay outside Git.
 
-### Running longer test and bench handoff
+### Completed hour-scale test — 17:50 CEST
 
-At 16:49:51 CEST an independent systemd user service started a minimum-hour
-S3↔iPhone test: `ble-m16-s3-soak-20261016.service`. It runs repeated 1024-frame
-duplex batches on one connection for its main phase, initially 27 batches, and
-extends if needed to reach one hour. Every batch uses the existing receipt,
-sequence, pattern and FINISH checks; failure stops the test without retry.
-The supervisor additionally checks the firmware hash and the full negotiated
-parameter tuple. A 600-second absence of serial evidence is a supervisor
-failure, distinct from a transport or ECU response timer.
+The independent `ble-m16-s3-soak-20261016.service` passed from 16:49:51 to
+17:50:04 CEST: 3613.07 seconds elapsed, exit status 0. The S3 and iPhone kept
+one connection for all 27 duplex batches, each with 1024 DATA frames in each
+direction. These are repeated batches with control/sample-dump gaps, not a
+claim of an uninterrupted hour of DATA transmission.
 
-The first batch passed (1024 frames in each direction, 62.52 KiB/s summed).
-The hour result is still pending. Estimated completion is around 17:50–17:55
-CEST, depending on the subsequent link rate. The service survives this agent's
-shell lifetime, retains partial failure evidence, exports the peer log and
-ends only the bench app's iPhone process afterward to release its auto-lock
-override. Its durable status is `soak-state.json` in the private iPhone evidence
-directory. The active soak is excluded from the completed-matrix totals.
+All 55,296 DATA frames passed sequence, per-run token, length and pattern
+validation, with zero receiver errors on either peer, zero callback faults,
+and matching receiver receipts and FINISH confirmation for every batch. The
+archive contains every TX/RX sample in sequence. There were 216 MiB of DATA
+bodies including eight metadata bytes per frame (215.578125 MiB of useful
+pattern bytes), excluding framing. All 55 negotiated/before/after parameter
+records retain 15 ms, 2M/2M PHY, 251/251-byte DLE and MTU 1251.
+
+Median per-batch summed useful wall goodput is 61.60 KiB/s, with a range of
+55.93–64.03 KiB/s; aggregate useful goodput over the 3589.44 measured seconds
+is 61.50 KiB/s. The first five batches have a median of 62.52 KiB/s, the last
+five 60.73 KiB/s. This variation does not establish a monotonic degradation
+or its cause in an uncontrolled radio environment.
+
+Every one of the 27 after-run heap samples reports 213908 free bytes,
+213712 internal free bytes, a 143360-byte largest internal block, and ten
+tasks. The low-water mark settles at 188068 bytes after the third batch.
+This is no visible progressive heap loss during this test; it does not prove
+all allocations are reclaimed across arbitrary reconnect or error paths.
+
+The supervisor checked the exact archived firmware hash and full negotiated
+parameter tuple, stopped on first failure without retry, and had a separate
+600-second no-serial-evidence watchdog. The final disconnect succeeded. The
+peer logs were exported and only the bench app's iPhone process was terminated
+to release its auto-lock override. Durable status is `soak-state.json` in the
+private iPhone evidence directory. This soak is additional to, and excluded
+from, the 24-capture matrix totals. There is no S31 hour-scale result yet.
 
 The S31 is restored to the LIS2DW12 hwtest image; flash hashes and console help
 were checked. The serial helper must answer the terminal cursor-position query
 before issuing a command. No physical tap test was repeated. S3 retains window-8
-benchmark firmware and its serial port belongs to the running service.
+benchmark firmware; the completed service has released its serial port.
 
 Private evidence directories on the Linux host:
 `~/Dokumente/late/measurements/ble/2026-10-16-resource-limits` and
-`~/Dokumente/late/measurements/ble/2026-10-16-iphone`. Remaining gates are the
-hour result, day-scale endurance, multiple connections/channels, RF-loss and
+`~/Dokumente/late/measurements/ble/2026-10-16-iphone`. Remaining gates are S31
+hour-scale and day-scale endurance, multiple connections/channels, RF-loss and
 controller-reset cases, and actual production ECOS/CAN-answer lifecycle checks.
