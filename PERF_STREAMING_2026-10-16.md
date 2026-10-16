@@ -11,7 +11,8 @@ forced-disconnect/recovery tests passed on both chips. There are now 210
 explicit reconnect stress cycles. The final archived peer is identified below;
 iPhone, long endurance and production acceptance were open at that checkpoint.
 The later resource/iPhone checkpoint at the end records subsequent acceptance
-and the completed hour-scale test.
+and the completed hour-scale test. The review follow-up at the end changes
+the implementation; those new changes have not yet repeated the radio tests.
 
 ## Finding: CoC credits do not bound native HCI backlog
 
@@ -566,3 +567,124 @@ Private evidence directories on the Linux host:
 `~/Dokumente/late/measurements/ble/2026-10-16-iphone`. Remaining gates are S31
 hour-scale and day-scale endurance, multiple connections/channels, RF-loss and
 controller-reset cases, and actual production ECOS/CAN-answer lifecycle checks.
+
+
+## Review follow-up — 2026-10-16
+
+The external review of `022135e`, the original alignment implementation and
+resource branch `0d34dba` was checked against pinned IDF `fff9895` / NimBLE
+`139cada`. The earlier measurements remain evidence for runtime `957015c`,
+not hardware acceptance of the changes below. Production pins/defaults and
+existing upstream PR branches were not changed.
+
+### Findings and implemented changes
+
+1. **Confirmed: host-callback writes could abort on wrapper backpressure.**
+   A blocked preflight returned the private wait result, writeFragment changed
+   it to native EBUSY, and write closed the channel. Host-task writers now
+   bypass the wrapper preflight and retain native send behavior. This avoids
+   the added abort path, but does not make host writes safe under arbitrary
+   native resource or credit exhaustion. Worker TX remains required for
+   sustained traffic. Tests cover both direct host writes and a real inline
+   onRead callback, as well as genuine native EBUSY abort/ownership handling.
+
+2. **Accepted: window 8 is a tested setting, not a pool-derived safety bound.**
+   A host-allocation estimate now warns when one full SDU plus a simple
+   one-block-per-outstanding-packet allowance reaches configured MSYS1 count.
+   It includes per-PDU packet/header headroom and same-pool append geometry.
+   This is advisory, with no forced window or pool changes; RX/ATT, other
+   channels, ACL re-fragmentation and controller ownership are not modelled.
+   S31 instead warns explicitly that its controller-owned backend has no
+   verified capacity mapping from this configuration. Kconfig states the
+   measured 24-block baseline, unvalidated 12-block/multiple-channel cases,
+   and the risk of starving the controller with an overly small window.
+   In pinned esp-hci/src/esp_nimble_hci.c, S3's ble_hci_trans_hs_acl_tx copies
+   the mbuf into a flat VHCI buffer and frees the chain after handing it off;
+   its outstanding count therefore is not a count of retained host mbufs.
+   S31 uses the embedded-controller path in ble_hs_hci.c. Whether its observed
+   need for the outstanding threshold is specifically caused by controller
+   retention of pool blocks remains a hypothesis; it has not been measured.
+
+3. **Confirmed and reduced: active wait overhead.**
+   One mbuf is allocated/copied per SDU and retained across blocked preflights.
+   After a host preflight declines, the worker polls readiness under the native
+   lock, with no new host event, allocation or copy while it remains blocked.
+   A final host check still closes the gap between worker observation and
+   native submission. Timeout/disconnect safely reclaim untouched buffers,
+   including a host preflight that returns after the writer timed out.
+   Actual native failures still abort after one attempt; no partial-SDU retry
+   was introduced. Tests count allocations, appends and queued events and
+   check retained-buffer cleanup. Tick rate is documented (1 ms at 1000 Hz,
+   10 ms at 100 Hz). Optional diagnostics expose cumulative attempted SDUs,
+   wait ticks, maximum waits per SDU and host bypasses, without changing the
+   non-diagnostic fast path. CPU load and energy savings remain unmeasured.
+
+4. **Confirmed: alignment changes externally visible SDU boundaries.**
+   No automatic alignment policy change was made. Kconfig/header/README now
+   require byte-stream/framed-stream peers, explain 1250/1251-byte splitting
+   at Apple MTU/MPS 1251 and unchanged onConnect MTU reporting, and mention
+   the possible extra SDU/host-round-trip cost. Channel tests verify boundaries
+   1249, 1250, 1251 and 4100 and preservation of all bytes. Message-preserving
+   peers require alignment off. The option remains off by default.
+
+5. **Accepted: private-header dependence is a semantic SDK risk.**
+   CMake resolves bt's COMPONENT_DIR instead of constructing its path from
+   the environment. The optional internals are still pinned-IDF features.
+   Correctness builds on older IDF versions do not establish compatibility
+   of the experimental private-field checks there.
+
+The review also exposes a validation caveat: the existing pool test models
+header capacity through a stub rather than exercising IDF's native allocator.
+It is not independent native-allocation proof. Radio resource tests provide
+separate evidence for the tested profiles; reserve for RX/ATT and multiple
+large SDUs is still open. Two assert-based geometry/protocol test targets now
+explicitly keep assertions enabled in Release as well.
+
+### Refined interpretation of the measurements
+
+The ENOMEM failure/pass/return controls give strong evidence for the earlier
+window candidate in the tested fixtures. They do not prove zero overhead when
+the window actually limits traffic. The low-load echo control cannot measure
+that cost. Alignment A/B remains exploratory: a 15-ms RTT shift can be one
+connection interval; off/off tail latency itself moves by an interval, and
+RTT-derived goodput is not independent corroboration. The reported gains are
+observations in those sequential runs, not a general 6-percent improvement.
+
+The review's 20-to-17 LL-packet arithmetic for a 4100-byte frame is consistent
+with a model using MPS 1251, 251-byte LL payloads and four-byte L2CAP headers.
+These are predicted counts, not observed radio packets. Controller splitting,
+retransmission and actual LL packing must be measured before using this as
+proof. The proposed MPS 247/498 exploration likewise remains a hypothesis.
+
+For the 5000-byte S3 resource example, the simple CoC-copy model actually yields
+**41**, not exactly 42, 256-byte MSYS1 blocks: twenty full 248-byte PDUs use two
+blocks each and the final 42-byte PDU uses one (5000 + two SDU-length bytes).
+42 is a conservative full-PDU rounding estimate. Both exceed 24, while the
+288-byte model needs 21 blocks. Neither calculation includes every possible
+ACL-fragment allocation, and neither proves adequate production reserve.
+
+### Validation and next measurements
+
+The revised implementation passes all 32 native cases in Release and with
+ASan/UBSan, including the inline callback and late-preflight-timeout races.
+The benchmark runner's diagnostics parser preserves the new cumulative fields.
+S3 and S31 firmware builds use the unchanged pinned IDF; separate compilation
+of both diagnostic channel variants checks those optional code paths as well.
+No device was reflashed for this review follow-up, so the hour result above
+continues to apply only to the earlier image.
+
+Before considering promotion:
+
+- Re-run Apple TX/RX/duplex and failure-return controls with the revised code;
+  retain the baseline pools and record actual link parameters and exact ELFs.
+- Sweep windows 4/8/16 against queue-only and the unchanged baseline, with
+  repeated/reversed-order runs. Queue-only is currently an historical candidate,
+  not an exposed config option. Record attempted SDUs, wait ticks and maximum
+  waits plus genuine host-task CPU time in separate instrumentation passes.
+- Repeat alignment off/on/off for streaming and iPhone, including sizes 1249,
+  1250, 1251 and 4100. Compare latency distributions by connection-interval
+  count; measure actual PDU/LL counts where observable, keeping predicted and
+  observed counts distinct. Avoid claiming additive gains from the separate
+  alignment and window experiments.
+- Add S31 endurance, smaller pools and RX/ATT/multiple-SDU pressure. Treat the
+  288-byte/48-block profiles as threshold demonstrations, not production sizing.

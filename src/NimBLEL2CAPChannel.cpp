@@ -16,16 +16,26 @@
 #  include "nimble/nimble_port.h"
 # endif
 # include <algorithm>
-#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS || CONFIG_NIMBLE_CPP_L2CAP_ALIGN_TX_SDUS
+#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS || CONFIG_NIMBLE_CPP_L2CAP_ALIGN_TX_SDUS || CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
 # include "ble_l2cap_priv.h"
 #endif
 #if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
+# include "soc/soc_caps.h"
 # include "ble_hs_conn_priv.h"
 # include "ble_hs_priv.h"
 // Internal result: no bytes from this SDU were submitted to NimBLE.
 static constexpr int WaitingForControllerBacklog = -1001;
+static bool controllerBackedUp(uint16_t handle) {
+    ble_hs_lock_nested();
+    auto* connection = ble_hs_conn_find(handle);
+    const bool backedUp = connection && (!STAILQ_EMPTY(&connection->bhc_tx_q) ||
+        connection->bhc_outstanding_pkts >= CONFIG_NIMBLE_CPP_L2CAP_HCI_TX_WINDOW);
+    ble_hs_unlock_nested();
+    return backedUp;
+}
 #endif
 # include "NimBLEL2CAPTxGeometry.h"
+# include "NimBLEL2CAPTxBudget.h"
 #if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
 # include "esp_timer.h"
 # include "esp_log.h"
@@ -39,6 +49,11 @@ void NimBLEL2CAPChannel::logTxStats() {
              (unsigned long)(s.queueTotal/s.sdus), (unsigned long)s.queueMax,
              (unsigned long)(s.sendTotal/s.sdus), (unsigned long)s.sendMax,
              (unsigned long)s.stallTotal, (unsigned long)s.stallMax);
+#if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
+    ESP_LOGI("BLETx", "backpressure_sdus_total=%lu waits_total=%lu waits_per_sdu_max=%lu host_bypasses_total=%lu (cumulative; one wait is one RTOS tick)",
+             (unsigned long)m_backpressureSdus.load(), (unsigned long)m_backpressureWaits.load(),
+             (unsigned long)m_backpressureWaitMax.load(), (unsigned long)m_backpressureHostBypasses.load());
+#endif
     m_txStats = {};
 }
 #endif
@@ -186,7 +201,7 @@ struct NimBLEL2CAPChannel::TxCompletion {
 void NimBLEL2CAPChannel::transmitOnHost(ble_npl_event* event) {
     auto* ch = static_cast<NimBLEL2CAPChannel*>(ble_npl_event_get_arg(event));
     auto* buffer = ch->m_txBuffer.exchange(nullptr);
-    if (!buffer) { return; }
+    if (!buffer) { ch->m_pendingHostJobs.fetch_sub(1); return; }
     if (!ch->isConnected() || ch->m_txGeneration.load() != ch->m_generation.load() || !ch->channel) {
         os_mbuf_free_chain(buffer);
         ch->m_completion->finish(BLE_HS_ENOTCONN);
@@ -194,13 +209,11 @@ void NimBLEL2CAPChannel::transmitOnHost(ble_npl_event* event) {
 #if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
         // Peer CoC credits do not bound the local HCI packet queue. Inspect it
         // on the host while locked, before ble_l2cap_send can consume any data.
-        ble_hs_lock_nested();
-        auto* connection = ble_hs_conn_find(ch->getConnHandle());
-        const bool backedUp = connection && (!STAILQ_EMPTY(&connection->bhc_tx_q) ||
-            connection->bhc_outstanding_pkts >= CONFIG_NIMBLE_CPP_L2CAP_HCI_TX_WINDOW);
-        ble_hs_unlock_nested();
-        if (backedUp) {
-            os_mbuf_free_chain(buffer);
+        // A synchronous host callback cannot wait for host/controller progress.
+        // Preserve its original native-send path rather than closing on a
+        // wrapper-generated EBUSY. Worker writers opt in before queuing this job.
+        if (ch->m_txCheckBacklog.load() && controllerBackedUp(ch->getConnHandle())) {
+            ch->m_txBuffer.store(buffer); // untouched SDU, reused after backlog drains
             ch->m_completion->finish(WaitingForControllerBacklog);
             ch->m_pendingHostJobs.fetch_sub(1);
             return;
@@ -251,6 +264,12 @@ void NimBLEL2CAPChannel::disconnectOnHost(ble_npl_event* event) {
     if (ch->m_activeSend) {
         ch->m_activeSend->finish(BLE_HS_ENOTCONN);
         ch->m_activeSend = nullptr;
+    }
+    // A timed-out host preflight can restore an untouched SDU after the
+    // worker's exit guard ran. The serialized disconnect job reclaims it.
+    if (auto* pending = ch->m_txBuffer.exchange(nullptr)) {
+        os_mbuf_free_chain(pending);
+        ch->m_completion->finish(BLE_HS_ENOTCONN);
     }
     if (ch->channel) { ble_l2cap_disconnect(ch->channel); }
     ch->m_pendingHostJobs.fetch_sub(1);
@@ -361,9 +380,11 @@ int NimBLEL2CAPChannel::writeFragment(std::vector<uint8_t>::const_iterator begin
 #if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
     const auto began = xTaskGetTickCount();
     const bool onHost = xTaskGetCurrentTaskHandle() == m_hostTask.load();
-    while (true) {
-        if (!isConnected()) return BLE_HS_ENOTCONN;
-        if (TickType_t(xTaskGetTickCount() - began) >= pdMS_TO_TICKS(SendTimeoutMs)) return BLE_HS_ETIMEOUT;
+    m_txCheckBacklog.store(!onHost);
+#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
+    m_backpressureSdus.fetch_add(1);
+    if (onHost) m_backpressureHostBypasses.fetch_add(1);
+#endif
 #endif
     auto* buffer = os_mbuf_get_pkthdr(&_coc_mbuf_pool, 0);
     if (!buffer) {
@@ -372,11 +393,39 @@ int NimBLEL2CAPChannel::writeFragment(std::vector<uint8_t>::const_iterator begin
     }
     int rc = os_mbuf_append(buffer, &*begin, end - begin);
     if (rc) { os_mbuf_free_chain(buffer); return rc; }
+    m_txGeneration.store(m_generation.load());
+    m_txBuffer.store(buffer);
+    // Exchange transfers ownership to exactly one side. On timeout, a queued
+    // host event either already owns the SDU or observes null and only drains
+    // its job count. Never free an SDU already passed to native NimBLE.
+    struct PendingBufferExit {
+        std::atomic<os_mbuf*>& buffer;
+        ~PendingBufferExit() { if (auto* b = buffer.exchange(nullptr)) os_mbuf_free_chain(b); }
+    } release{m_txBuffer};
+#if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
+    bool waitingForBacklog = false;
+#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
+    uint32_t waits = 0;
+#endif
+    while (true) {
+        if (!isConnected()) return BLE_HS_ENOTCONN;
+        if (TickType_t(xTaskGetTickCount() - began) >= pdMS_TO_TICKS(SendTimeoutMs)) return BLE_HS_ETIMEOUT;
+        // After the host declines submission, check readiness on the worker
+        // under the native lock. No allocation, copy or host event per tick.
+        if (waitingForBacklog && controllerBackedUp(getConnHandle())) {
+#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
+            ++waits;
+            m_backpressureWaits.fetch_add(1);
+            // One writer owns this channel; the host only reads these totals.
+            m_backpressureWaitMax.store(std::max(m_backpressureWaitMax.load(), waits));
+#endif
+            vTaskDelay(1);
+            continue;
+        }
+#endif
     auto* completion = m_completion.get();
     completion->reset();
-    m_txGeneration.store(m_generation.load());
     m_pendingHostJobs.fetch_add(1);
-    m_txBuffer.store(buffer);
 #if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
     m_txQueuedAt.store(uint32_t(esp_timer_get_time()));
 #endif
@@ -397,10 +446,7 @@ int NimBLEL2CAPChannel::writeFragment(std::vector<uint8_t>::const_iterator begin
     const int status = completion->status.load();
 #if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
     if (status == WaitingForControllerBacklog) {
-        if (onHost) return BLE_HS_EBUSY;
-        if (TickType_t(xTaskGetTickCount() - began) >= pdMS_TO_TICKS(SendTimeoutMs)) return BLE_HS_ETIMEOUT;
-        // Active backpressure only: no idle polling and no pause on an empty queue.
-        vTaskDelay(1);
+        waitingForBacklog = true;
         continue;
     }
 #endif
@@ -541,7 +587,28 @@ int NimBLEL2CAPChannel::handleConnectionEvent(struct ble_l2cap_event* event) {
     txSduWidth = nimbleL2capTxSduWidth(negotiatedMTU, channel->peer_coc_mps);
 #endif
     m_txSduWidth.store(txSduWidth);
+#if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
+    // Nine bytes are the pinned VHCI allocator's ACL + L2CAP + type headroom.
+    // This host-side model must not be presented as a controller-pool limit.
+#if SOC_ESP_NIMBLE_CONTROLLER
+    NIMBLE_LOGW(LOG_TAG, "HCI window %u: controller-owned MSYS backend; configured MSYS1=%u is not a verified controller-pool budget. Window 8 was tested with 24 configured MSYS1 blocks; validate changed pools/channels.",
+                CONFIG_NIMBLE_CPP_L2CAP_HCI_TX_WINDOW, MYNEWT_VAL(MSYS_1_BLOCK_COUNT));
+#else
+    const auto sduBlocks = nimbleL2capTxPoolBlocks(txSduWidth, channel->peer_coc_mps,
+        MYNEWT_VAL(MSYS_1_BLOCK_SIZE), sizeof(os_mbuf), sizeof(os_mbuf_pkthdr), 9);
+    if (nimbleL2capTxPoolTight(sduBlocks, CONFIG_NIMBLE_CPP_L2CAP_HCI_TX_WINDOW, MYNEWT_VAL(MSYS_1_BLOCK_COUNT))) {
+        NIMBLE_LOGW(LOG_TAG, "HCI pool headroom advisory: estimated full-SDU host blocks=%lu plus window allowance=%u reaches configured MSYS1=%u. RX/ATT, other channels and controller ownership are not modelled; validate or reduce window/increase pools.",
+                    (unsigned long)sduBlocks, CONFIG_NIMBLE_CPP_L2CAP_HCI_TX_WINDOW - 1, MYNEWT_VAL(MSYS_1_BLOCK_COUNT));
+    }
+#endif
+#endif
 #if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
+#if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
+    m_backpressureSdus.store(0);
+    m_backpressureWaits.store(0);
+    m_backpressureWaitMax.store(0);
+    m_backpressureHostBypasses.store(0);
+#endif
     ESP_LOGI("BLETx", "negotiated_SDU_MTU=%u tx_SDU_width=%u", negotiatedMTU, txSduWidth);
 #endif
 #if CONFIG_NIMBLE_CPP_L2CAP_DEFERRED_READ_CALLBACKS

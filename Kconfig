@@ -265,6 +265,11 @@ config NIMBLE_CPP_L2CAP_ALIGN_TX_SDUS
         Reduce the TX chunk width to avoid a small final credit-based PDU.
         Uses peer MPS from the pinned ESP-IDF NimBLE private channel layout.
         Does not change negotiated parameters or application byte ordering.
+        Changes SDU boundaries, including writes smaller than the negotiated MTU:
+        at peer MPS/MTU 1251, writes of 1250 or 1251 bytes become two SDUs.
+        Use only with a byte-stream/framed-stream peer, not when SDUs are messages
+        (e.g. SOCK_SEQPACKET). onConnect still reports the negotiated MTU.
+        Smaller chunks can require extra SDUs and host round trips.
 
 config NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
     bool "Log L2CAP TX geometry, credits and host timing (pinned ESP-IDF only)"
@@ -280,9 +285,15 @@ config NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
         Wait for HCI ACL backlog and outstanding-packet pressure before
         submitting another SDU. Prevents unbounded host packet buffering when peer CoC credits are
         much larger than local pools. Uses the pinned NimBLE private connection
-        layout. Only worker writers wait, using the existing send deadline;
-        host callbacks never wait. A failed or partially submitted SDU is never
-        retried. This option is experimental pending Apple/ESP/product tests.
+        layout. Only worker writers use the preflight and wait, within the
+        existing send deadline. Host-callback writes bypass this option and
+        keep native send semantics, including resource exhaustion risks.
+        Use a worker for sustained TX. An untouched SDU is retained while waiting;
+        a failed or partially submitted native SDU is never retried.
+        Readiness is checked under the native lock on the worker after a blocked
+        preflight, with one RTOS tick between checks (1 ms at 1000 Hz, 10 ms at
+        100 Hz). No idle polling. Tick granularity and lock contention may affect
+        throughput. This option remains experimental, validated on pinned IDF 6.1.
 
 config NIMBLE_CPP_L2CAP_HCI_TX_WINDOW
     int "Outstanding HCI ACL threshold before starting another SDU"
@@ -294,5 +305,10 @@ config NIMBLE_CPP_L2CAP_HCI_TX_WINDOW
         on the controller. One SDU can add several packets, so this is a start
         threshold, not a hard cap on the total packet count. This is an explicit
         resource window, not a connection-interval or radio-latency assumption.
+        Window 8 was tested with MSYS1 24x256, MSYS2 24x320 and ACL count 24;
+        it is not validated for 12-block pools or multiple channels. A full SDU
+        must still fit in native resources. Connection-time warnings are advisory
+        host-allocation estimates, not proof of sufficient controller/RX/ATT budget.
+        Smaller values can starve the controller; larger ones can exhaust pools.
 
 endmenu

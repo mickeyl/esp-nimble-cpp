@@ -28,6 +28,13 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(result["log_timestamp_ms"], 120)
         self.assertEqual(result["event"], "txstats")
         self.assertIsNone(bench.tx_stats(b"I (120) other log line"))
+
+    def test_backpressure_diagnostics_preserve_cumulative_counters(self):
+        result = bench.tx_stats(b"I (120) BLETx: backpressure_sdus_total=32 waits_total=58 waits_per_sdu_max=7 host_bypasses_total=0 (cumulative; one wait is one RTOS tick)")
+        self.assertEqual(result["backpressure_sdus_total"], 32)
+        self.assertEqual(result["waits_total"], 58)
+        self.assertEqual(result["waits_per_sdu_max"], 7)
+        self.assertEqual(result["host_bypasses_total"], 0)
     def test_stream_requires_both_receipts_and_complete_sample_sequences(self):
         receipt = {"token": 42, "frames": 2, "bytes": 128, "errors": 0, "first_us": 100, "last_us": 200}
         result = {"event": "run-result", "success": True, "completed": 2, "token": 42,

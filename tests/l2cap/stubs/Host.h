@@ -95,6 +95,7 @@ inline size_t hostPayloadCapacity = 0;
 using os_membuf_t = uint8_t;
 inline std::atomic<int> liveMbufs{0};
 inline std::atomic<int> appendError{0};
+inline std::atomic<int> hostMbufAllocations{0}, hostMbufAppends{0};
 struct os_mbuf {
     std::vector<uint8_t> bytes;
     os_mbuf(std::vector<uint8_t> data = {}) : bytes(std::move(data)) { ++liveMbufs; }
@@ -112,9 +113,11 @@ inline int os_mbuf_pool_init(os_mbuf_pool*, os_mempool*, size_t blockSize, size_
 }
 inline void     os_mempool_unregister(os_mempool*) {}
 inline os_mbuf* os_mbuf_get_pkthdr(os_mbuf_pool*, int) {
+    ++hostMbufAllocations;
     return new os_mbuf;
 }
 inline int os_mbuf_append(os_mbuf* b, const void* p, size_t n) {
+    ++hostMbufAppends;
     if (appendError.load()) return appendError.load();
     auto a = (const uint8_t*)p;
     b->bytes.insert(b->bytes.end(), a, a + n);
@@ -132,7 +135,8 @@ constexpr int      BLE_HS_EAGAIN = 1, BLE_HS_ENOMEM = 6, BLE_HS_ENOTCONN = 7, BL
                    BLE_HS_EBADDATA = 10, BLE_HS_EBUSY = 15, BLE_HS_EREJECT = 14, BLE_HS_ESTALLED = 31, BLE_HS_EUNKNOWN = 17,
                    BLE_HS_ETIMEOUT         = 13;
 constexpr uint16_t BLE_HS_CONN_HANDLE_NONE = 0xffff;
-struct ble_l2cap_chan {};
+struct ble_l2cap_chan { uint16_t peer_coc_mps = 1251; };
+inline uint16_t hostNegotiatedMtu = 8;
 struct ble_l2cap_chan_info {
     uint16_t peer_coc_mtu = 8, our_coc_mtu = 8, peer_l2cap_mtu = 8, our_l2cap_mtu = 8, scid = 1, dcid = 2, psm = 129;
 };
@@ -156,6 +160,7 @@ inline std::atomic<int>             hostDisconnects{0};
 inline int                          ble_l2cap_get_chan_info(ble_l2cap_chan* c, ble_l2cap_chan_info* i) {
     if (!c) return BLE_HS_ENOTCONN;
     *i = {};
+    i->peer_coc_mtu = i->our_coc_mtu = hostNegotiatedMtu;
     return 0;
 }
 inline uint16_t ble_l2cap_get_conn_handle(ble_l2cap_chan*) {
@@ -275,7 +280,9 @@ inline QueueHandle_t nimble_port_get_dflt_eventq() {
     }();
     return q;
 }
+inline std::atomic<int> hostEventsQueued{0};
 inline void ble_npl_eventq_put(QueueHandle_t q, ble_npl_event* e) {
+    ++hostEventsQueued;
     const auto queued = xQueueSend(q, &e, 0);
     assert(queued == pdTRUE);
     (void)queued;

@@ -80,8 +80,9 @@ idf_component_register(
 
 # Optional features tied to the pinned ESP-IDF NimBLE internals.
 if(CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS OR CONFIG_NIMBLE_CPP_L2CAP_ALIGN_TX_SDUS OR CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE)
+    idf_component_get_property(nimble_bt_dir bt COMPONENT_DIR)
     target_include_directories(${COMPONENT_LIB} PRIVATE
-        "$ENV{IDF_PATH}/components/bt/host/nimble/nimble/nimble/host/src")
+        "${nimble_bt_dir}/host/nimble/nimble/nimble/host/src")
 endif()
 if(CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS)
     target_link_libraries(${COMPONENT_LIB} PRIVATE idf::esp_timer)

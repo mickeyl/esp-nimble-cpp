@@ -201,3 +201,15 @@ to the operator; no iPhone or production ECOS acceptance is claimed here.
 4. Re-run the ECOS diagnostic benchmark and real CAN-response lifecycle checks
    before updating the product's submodule/configuration. S3↔S3 awaits a second
    S3; the available ESP pair here is S3↔S31.
+
+
+## Review interpretation — 2026-10-16
+
+The alignment percentages above are exploratory observations from sequential
+macOS echo/request runs. RTT changes are quantized by the 15-ms connection
+interval; off/off p95 itself changes by an interval in some cases, and the
+reported goodput derives from the same round-trip timings. These are not
+independent measurements establishing a universal percentage gain. Streaming,
+iPhone alignment A/B, host-task CPU and observed PDU/LL counts remain open.
+See the review follow-up in PERF_STREAMING_2026-10-16.md for implementation
+changes, the SDU-boundary contract and required counterprobes.

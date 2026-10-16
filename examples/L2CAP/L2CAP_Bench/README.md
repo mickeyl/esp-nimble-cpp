@@ -196,11 +196,26 @@ before SDU submission. The configurable `HCI_TX_WINDOW` defaults to 8; this is
 a threshold for starting another SDU, not a hard total packet cap because one
 SDU can add several ACL packets. If backed up or at that threshold,
 that SDU is not submitted; a worker waits one RTOS tick and checks again, within
-the existing send deadline. When both readiness checks are clear it adds no deliberate wait.
-Host callbacks never wait. This is active TX backpressure, with no idle poller.
+the existing send deadline. The untouched mbuf is retained. After a blocked
+host preflight, the worker checks readiness under the native lock without
+allocating/copying again or queuing a host event per tick. Submission is still
+checked again on the host. One tick is 1 ms at 1000 Hz and 10 ms at 100 Hz;
+when ready there is no deliberate wait. There is no idle poller.
+
+Host-callback writes bypass the preflight and retain native send semantics,
+including native resource/credit failures. Sustained TX must use a worker.
+Connection-time pool warnings are advisory: they model one full SDU's host
+mbufs plus a simple outstanding-packet allowance, not sufficient RX/ATT,
+multi-channel or controller capacity. The S31 explicitly reports its opaque
+controller-owned backend instead. Window 8 was measured with MSYS1 24x256,
+MSYS2 24x320 and ACL count 24; 12-block pools are not validated. Too small a
+window can leave the controller idle, and too large a window can exhaust pools.
+
 Actual send failures still abort the channel and are never retried. The option
 uses the pinned IDF private connection layout and stays off by default, pending
-broader tests and product/iPhone acceptance. The initial queue-only candidate worked on S3 but still hit ENOMEM on S31;
+broader tests and production acceptance. The earlier candidate passed the
+iPhone matrix and S3 hour run; the review follow-up needs new hardware runs.
+The initial queue-only candidate worked on S3 but still hit ENOMEM on S31;
 the separate outstanding window addresses that additional path. It is not a general guarantee for
 arbitrary pool sizes or concurrent channels.
 
@@ -213,3 +228,21 @@ queue/send timing and credit-stall records into `txstats` events. Windows reset
 per 32 SDUs or at disconnect, so they may straddle benchmark runs; use one case
 per connection for attribution. Diagnostic builds are separate from timing
 baselines. Both raw lines and parsed records are retained.
+
+Backpressure diagnostics add per-connection cumulative attempted-SDU, wait and
+host-bypass counts plus maximum waits for one SDU. These counters do not reset
+with the 32-SDU timing windows. A wait is one readiness-poll delay, not a native
+send retry. Compare start/end snapshots; final disconnect prints the totals.
+They do not measure host-task CPU utilization or RF packet counts.
+
+### Experimental TX alignment contract
+
+`sdkconfig.align` aligns TX chunk sizes to peer MPS including the SDU length.
+It preserves application bytes but changes SDU boundaries: at MTU/MPS 1251,
+1250- and 1251-byte writes become 1249+1 and 1249+2. Peers that treat SDUs as
+messages (such as a SOCK_SEQPACKET consumer) cannot assume one write is one
+SDU. onConnect still reports negotiated MTU. Alignment is only suitable for
+a byte-stream/framed-stream consumer and can add SDUs and host round trips.
+The existing macOS echo A/B suggests a benefit; streaming/iPhone A/B, CPU and
+observed PDU/LL counts remain unmeasured. See the review follow-up in
+`PERF_STREAMING_2026-10-16.md` for the measurement gates.

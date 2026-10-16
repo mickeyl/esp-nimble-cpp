@@ -1,8 +1,17 @@
 #include "NimBLEL2CAPTxGeometry.h"
+#include "NimBLEL2CAPTxBudget.h"
 #include <initializer_list>
 #include <cassert>
 #include <cstdint>
 int main() {
+    // Pinned S3 header geometry; the short last PDU needs only one block.
+    static_assert(nimbleL2capTxPoolBlocks(5000,248,256,16,8,9)==41);
+    static_assert(nimbleL2capTxPoolBlocks(5000,248,288,16,8,9)==21);
+    static_assert(nimbleL2capTxPoolBlocks(1251,1251,256,16,8,9)==7);
+    static_assert(nimbleL2capTxPoolBlocks(1249,1251,256,16,8,9)==6);
+    static_assert(nimbleL2capTxPoolBlocks(1251,0,256,16,8,9)==0);
+    static_assert(nimbleL2capTxPoolTight(7,8,12));
+    static_assert(!nimbleL2capTxPoolTight(7,8,24));
     static_assert(nimbleL2capTxSduWidth(1251,1251)==1249);
     static_assert(nimbleL2capTxSduWidth(672,23)==665);
     static_assert(nimbleL2capTxSduWidth(100,1251)==100);

@@ -31,7 +31,7 @@ static void onHost(std::function<void()> fn) {
 }
 struct Channel : NimBLEL2CAPChannel {
     ble_l2cap_chan native;
-    Channel(NimBLEL2CAPChannelCallbacks* cb = new NimBLEL2CAPChannelCallbacks) : NimBLEL2CAPChannel(129, 64, cb) {
+    Channel(NimBLEL2CAPChannelCallbacks* cb = new NimBLEL2CAPChannelCallbacks, uint16_t mtu = 64) : NimBLEL2CAPChannel(129, mtu, cb) {
         onHost([&] {
             ble_l2cap_event e{};
             e.connect.chan = &native;
@@ -80,13 +80,68 @@ int main(int argc, char** argv) {
     try {
         const std::string name = argc > 1 ? argv[1] : "errors";
 #if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
+        if (name == "backpressure_host_read") {
+            struct Callbacks : NimBLEL2CAPChannelCallbacks {
+                bool success = false;
+                void onRead(NimBLEL2CAPChannel* c, std::vector<uint8_t>& bytes) override { success = c->write(bytes); }
+            };
+            auto* cb = new Callbacks;
+            Channel c(cb);
+            int sends = 0;
+            hostSend = [&](os_mbuf* b) { ++sends; delete b; return 0; };
+            hostConnection.bhc_tx_q.pending = true;
+            hostConnection.bhc_outstanding_pkts = CONFIG_NIMBLE_CPP_L2CAP_HCI_TX_WINDOW;
+            hostDisconnects = 0;
+            c.receive(std::vector<uint8_t>(20, 0x55));
+            require(cb->success && sends == 3 && c.isConnected() && hostDisconnects == 0,
+                    "inline onRead writer disconnected under wrapper backpressure");
+            hostConnection.bhc_tx_q.pending = false;
+            hostConnection.bhc_outstanding_pkts = 0;
+            return 0;
+        }
+        if (name == "backpressure_preflight_timeout") {
+            Channel c;
+            std::promise<void> entered, release;
+            auto gate = release.get_future().share();
+            hostBeforeConnectionLookup = [&] { entered.set_value(); gate.wait(); };
+            hostConnection.bhc_tx_q.pending = true;
+            hostDisconnects = 0;
+            int sends = 0;
+            hostSend = [&](os_mbuf* b) { ++sends; delete b; return 0; };
+            auto writer = std::async(std::launch::async, [&] { return c.write({1, 2, 3}); });
+            entered.get_future().wait();
+            const bool timedOut = writer.wait_for(2500ms) == std::future_status::ready;
+            release.set_value();
+            const bool success = writer.get();
+            onHost([] {});
+            require(timedOut && !success && sends == 0 && hostDisconnects == 1 && liveMbufs == 0,
+                    "late blocked preflight leaked or sent a timed-out SDU");
+            hostBeforeConnectionLookup = {};
+            hostConnection.bhc_tx_q.pending = false;
+            return 0;
+        }
         if (name == "backpressure_host") {
             Channel c; int sends = 0;
             hostSend = [&](os_mbuf* b) { ++sends; delete b; return 0; };
+            hostDisconnects = 0;
             hostConnection.bhc_tx_q.pending = true;
+            hostConnection.bhc_outstanding_pkts = CONFIG_NIMBLE_CPP_L2CAP_HCI_TX_WINDOW;
             const auto began = std::chrono::steady_clock::now();
-            onHost([&] { require(!c.write(std::vector<uint8_t>(20, 0x55)), "host callback waited for backlog"); });
-            require(sends == 0 && std::chrono::steady_clock::now() - began < 500ms, "host callback blocked host progress");
+            onHost([&] { require(c.write(std::vector<uint8_t>(20, 0x55)), "host callback did not retain native send path"); });
+            require(sends == 3 && std::chrono::steady_clock::now() - began < 500ms, "host callback blocked host progress");
+            require(c.isConnected() && hostDisconnects == 0 && liveMbufs == 0, "backpressure disconnected host-callback writer");
+            hostConnection.bhc_tx_q.pending = false;
+            hostConnection.bhc_outstanding_pkts = 0;
+            return 0;
+        }
+        if (name == "backpressure_host_error") {
+            Channel c; int sends = 0;
+            hostSend = [&](os_mbuf*) { ++sends; return BLE_HS_EBUSY; }; // native retains early-error ownership
+            hostConnection.bhc_tx_q.pending = true;
+            hostDisconnects = 0;
+            onHost([&] { require(!c.write({1, 2, 3}), "native host send error was hidden"); });
+            require(sends == 1 && hostDisconnects == 1 && liveMbufs == 0,
+                    "actual native error retried or leaked the SDU");
             hostConnection.bhc_tx_q.pending = false;
             return 0;
         }
@@ -95,11 +150,18 @@ int main(int argc, char** argv) {
             hostSend = [&](os_mbuf* b) { ++sends; delete b; return 0; };
             if (name == "backpressure_window") hostConnection.bhc_outstanding_pkts = CONFIG_NIMBLE_CPP_L2CAP_HCI_TX_WINDOW;
             else hostConnection.bhc_tx_q.pending = true;
+            hostMbufAllocations = hostMbufAppends = 0;
+            const int queuedBefore = hostEventsQueued.load();
             auto writer = std::async(std::launch::async, [&] { return c.write(std::vector<uint8_t>(20, 0x55)); });
             require(writer.wait_for(30ms) == std::future_status::timeout && sends == 0, "submitted while HCI was backed up");
+            require(hostMbufAllocations == 1 && hostMbufAppends == 1 && liveMbufs == 1,
+                    "waiting repeatedly allocated/copied instead of retaining the untouched SDU");
+            require(hostEventsQueued == queuedBefore + 1, "waiting queued a host event on every tick");
             hostConnection.bhc_tx_q.pending = false;
             hostConnection.bhc_outstanding_pkts = 0;
             require(writer.get() && sends == 3, "backlog drain did not submit each fragment exactly once");
+            require(hostMbufAllocations == 3 && hostMbufAppends == 3 && liveMbufs == 0,
+                    "backpressure allocated extra SDUs or leaked a retained buffer");
             return 0;
         }
         if (name == "backpressure_disconnect" || name == "backpressure_timeout") {
@@ -112,10 +174,32 @@ int main(int argc, char** argv) {
             require(writer.wait_for(2500ms) == std::future_status::ready && !writer.get() && sends == 0,
                     "backpressure did not stop on disconnect/deadline without submitting data");
             hostConnection.bhc_tx_q.pending = false;
+            onHost([] {});
+            require(liveMbufs == 0, "backpressure exit leaked a retained SDU");
             return 0;
         }
 #endif
-        if (name == "pool") {
+        if (name == "alignment_boundaries") {
+            hostNegotiatedMtu = 1251;
+            Channel c(new NimBLEL2CAPChannelCallbacks, 1251);
+            std::vector<size_t> sizes;
+            std::vector<uint8_t> delivered;
+            hostSend = [&](os_mbuf* b) {
+                sizes.push_back(b->bytes.size());
+                delivered.insert(delivered.end(), b->bytes.begin(), b->bytes.end());
+                delete b;
+                return 0;
+            };
+            for (size_t size : {1249u, 1250u, 1251u, 4100u}) {
+                sizes.clear(); delivered.clear();
+                const std::vector<uint8_t> input(size, 0x55);
+                require(c.write(input) && delivered == input, "alignment changed application bytes");
+                const std::vector<size_t> expected = size == 1249 ? std::vector<size_t>{1249} :
+                    size == 1250 ? std::vector<size_t>{1249, 1} : size == 1251 ?
+                    std::vector<size_t>{1249, 2} : std::vector<size_t>{1249, 1249, 1249, 353};
+                require(sizes == expected && liveMbufs == 0, "unexpected aligned SDU boundaries");
+            }
+        } else if (name == "pool") {
             Channel c;
             require(hostPayloadCapacity >= 64, "one configured buffer cannot hold a full local-MTU SDU");
         } else if (name == "lifecycle") {

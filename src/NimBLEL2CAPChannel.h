@@ -63,15 +63,22 @@ class NimBLEL2CAPChannel {
 
     /// @brief Write data to the channel.
     ///
-    /// If the size of the data exceeds the MTU, the data will be split into multiple fragments.
+    /// Data exceeding the MTU is split into multiple SDUs. Optional TX alignment
+    /// can also split a write smaller than the MTU (1250/1251 bytes with Apple
+    /// MPS 1251). Use alignment only with a byte-stream/framed-stream peer;
+    /// message-oriented peers observe the changed SDU boundaries. onConnect()
+    /// continues to report negotiated MTU, not the smaller TX chunk width.
     /// @return true after complete host submission/credit progress. This does
     /// not prove that the remote application has consumed the data.
     /// @return false, if the data can't be sent.
     ///
     /// Whole writes are serialized. Credit waits are bounded; an incomplete write
     /// aborts the connection. Call from a worker task for blocking operation.
-    /// Optional HCI backpressure waits only before submission; actual send
-    /// errors never retry a partially submitted SDU.
+    /// Optional HCI backpressure waits only before worker submission. Host-task
+    /// writes bypass it and retain the native send behavior/resource risks;
+    /// use a worker for sustained traffic. Actual send errors never retry a
+    /// partially submitted SDU. Active waits use one RTOS tick per readiness
+    /// check (1 ms at 1000 Hz, 10 ms at 100 Hz); idle channels do not poll.
     /// Owners must disconnect and let callbacks finish before deleting a channel.
     bool write(const std::vector<uint8_t>& bytes);
 
@@ -132,6 +139,13 @@ class NimBLEL2CAPChannel {
     struct TxCompletion;
     std::unique_ptr<TxCompletion> m_completion;
     std::atomic<os_mbuf*> m_txBuffer{nullptr};
+#if CONFIG_NIMBLE_CPP_L2CAP_HCI_BACKPRESSURE
+    std::atomic<bool> m_txCheckBacklog{false};
+#if CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS
+    std::atomic<uint32_t> m_backpressureSdus{0}, m_backpressureWaits{0};
+    std::atomic<uint32_t> m_backpressureWaitMax{0}, m_backpressureHostBypasses{0};
+#endif
+#endif
     std::atomic<uint32_t> m_txGeneration{0};
     TxCompletion* m_activeSend{nullptr}; // host task only
     ble_npl_event m_txEvent{};
