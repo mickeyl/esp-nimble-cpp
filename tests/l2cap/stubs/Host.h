@@ -14,8 +14,8 @@
 #define CONFIG_NIMBLE_CPP_L2CAP_CALLBACK_QUEUE_LENGTH    4
 #define CONFIG_NIMBLE_CPP_L2CAP_CALLBACK_TASK_STACK_SIZE 4096
 #define CONFIG_NIMBLE_CPP_L2CAP_CALLBACK_TASK_PRIORITY   5
-#define CONFIG_NIMBLE_CPP_L2CAP_HCI_TX_WINDOW 8
 #define CONFIG_NIMBLE_CPP_L2CAP_SDU_BUFFER_COUNT         6
+#define CONFIG_NIMBLE_CPP_L2CAP_HCI_TX_WINDOW 8
 #define MYNEWT_VAL(x)                                    MYNEWT_VAL_##x
 #define MYNEWT_VAL_BLE_L2CAP_COC_MAX_NUM                 2
 #define MYNEWT_VAL_BLE_ROLE_CENTRAL                      0
@@ -90,9 +90,15 @@ struct os_mempool {
     const char* name = nullptr;
 };
 struct os_mbuf_pool {};
+struct os_mbuf_pkthdr { uint32_t length; };
+inline size_t hostPayloadCapacity = 0;
 using os_membuf_t = uint8_t;
+inline std::atomic<int> liveMbufs{0};
+inline std::atomic<int> appendError{0};
 struct os_mbuf {
     std::vector<uint8_t> bytes;
+    os_mbuf(std::vector<uint8_t> data = {}) : bytes(std::move(data)) { ++liveMbufs; }
+    ~os_mbuf() { --liveMbufs; }
 };
 #define OS_MEMPOOL_SIZE(n, s) ((n) * (s))
 #define OS_MBUF_PKTLEN(m)     ((m)->bytes.size())
@@ -100,7 +106,8 @@ inline int os_mempool_init(os_mempool* p, size_t, size_t, void*, const char* n) 
     p->name = n;
     return 0;
 }
-inline int os_mbuf_pool_init(os_mbuf_pool*, os_mempool*, size_t, size_t) {
+inline int os_mbuf_pool_init(os_mbuf_pool*, os_mempool*, size_t blockSize, size_t) {
+    hostPayloadCapacity = blockSize - sizeof(os_mbuf) - sizeof(os_mbuf_pkthdr);
     return 0;
 }
 inline void     os_mempool_unregister(os_mempool*) {}
@@ -108,6 +115,7 @@ inline os_mbuf* os_mbuf_get_pkthdr(os_mbuf_pool*, int) {
     return new os_mbuf;
 }
 inline int os_mbuf_append(os_mbuf* b, const void* p, size_t n) {
+    if (appendError.load()) return appendError.load();
     auto a = (const uint8_t*)p;
     b->bytes.insert(b->bytes.end(), a, a + n);
     return 0;
@@ -268,5 +276,7 @@ inline QueueHandle_t nimble_port_get_dflt_eventq() {
     return q;
 }
 inline void ble_npl_eventq_put(QueueHandle_t q, ble_npl_event* e) {
-    assert(xQueueSend(q, &e, 0) == pdTRUE);
+    const auto queued = xQueueSend(q, &e, 0);
+    assert(queued == pdTRUE);
+    (void)queued;
 }

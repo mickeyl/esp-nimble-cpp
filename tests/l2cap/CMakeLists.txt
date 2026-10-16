@@ -12,7 +12,7 @@ add_test(NAME l2cap_early_completion COMMAND l2cap_tests early)
 add_test(NAME l2cap_disconnect COMMAND l2cap_tests disconnect)
 set_tests_properties(l2cap_errors l2cap_early_completion l2cap_disconnect PROPERTIES TIMEOUT 10)
 
-foreach(case serialize timeout queued_timeout callbacks reconnect ownership lifecycle)
+foreach(case serialize timeout queued_timeout callbacks reconnect ownership lifecycle partial append success pool)
   add_test(NAME l2cap_${case} COMMAND l2cap_tests ${case})
   set_tests_properties(l2cap_${case} PROPERTIES TIMEOUT 10)
 endforeach()
@@ -27,14 +27,15 @@ add_test(NAME l2cap_inline_errors COMMAND l2cap_inline_tests errors)
 
 add_test(NAME l2cap_inline_lifecycle COMMAND l2cap_inline_tests lifecycle)
 
+add_executable(l2cap_bench_protocol_tests BenchProtocolTests.cpp)
+target_compile_features(l2cap_bench_protocol_tests PRIVATE cxx_std_17)
+add_test(NAME l2cap_bench_protocol COMMAND l2cap_bench_protocol_tests)
+
 add_executable(l2cap_geometry_tests TxGeometryTests.cpp)
 target_compile_features(l2cap_geometry_tests PRIVATE cxx_std_17)
 target_include_directories(l2cap_geometry_tests PRIVATE ../../src)
 add_test(NAME l2cap_geometry COMMAND l2cap_geometry_tests)
 
-add_executable(l2cap_bench_protocol_tests BenchProtocolTests.cpp)
-target_compile_features(l2cap_bench_protocol_tests PRIVATE cxx_std_17)
-add_test(NAME l2cap_bench_protocol COMMAND l2cap_bench_protocol_tests)
 
 add_executable(l2cap_backpressure_tests L2CAPTests.cpp ../../src/NimBLEL2CAPChannel.cpp)
 target_compile_features(l2cap_backpressure_tests PRIVATE cxx_std_17)

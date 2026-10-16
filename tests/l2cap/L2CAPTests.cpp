@@ -115,7 +115,10 @@ int main(int argc, char** argv) {
             return 0;
         }
 #endif
-        if (name == "lifecycle") {
+        if (name == "pool") {
+            Channel c;
+            require(hostPayloadCapacity >= 64, "one configured buffer cannot hold a full local-MTU SDU");
+        } else if (name == "lifecycle") {
             nimble_port_get_dflt_eventq();
             const int baselineQueues = hostQueueCount.load();
             for (int cycle = 0; cycle < 30; ++cycle) {
@@ -130,7 +133,7 @@ int main(int argc, char** argv) {
                 require(hostTaskCount == 0 && hostQueueCount == baselineQueues, "worker or queue leaked after shutdown");
             }
         } else if (name == "errors") {
-            for (auto error : {BLE_HS_ENOMEM, BLE_HS_EAGAIN, BLE_HS_ENOTCONN}) {
+            for (auto error : {BLE_HS_ENOMEM, BLE_HS_EAGAIN, BLE_HS_ENOTCONN, BLE_HS_EINVAL}) {
                 Channel c;
                 int     sends   = 0;
                 hostDisconnects = 0;
@@ -145,6 +148,46 @@ int main(int argc, char** argv) {
                 onHost([] {});
                 require(hostDisconnects == 1, "failed PDU did not abort stream");
             }
+        } else if (name == "partial") {
+            Channel c;
+            int sends = 0;
+            std::vector<uint8_t> delivered;
+            hostDisconnects = 0;
+            hostSend = [&](os_mbuf* b) {
+                ++sends;
+                const size_t size = sends == 1 ? b->bytes.size() : 2;
+                delivered.insert(delivered.end(), b->bytes.begin(), b->bytes.begin() + size);
+                delete b;
+                return sends == 1 ? 0 : BLE_HS_ENOMEM;
+            };
+            require(!c.write(std::vector<uint8_t>(24, 0x55)), "partial stream reported success");
+            onHost([] {});
+            require(sends == 2 && delivered.size() == 10 && hostDisconnects == 1,
+                    "partial SDU was replayed or incomplete stream not aborted");
+            require(liveMbufs == 0, "partial send leaked mbuf");
+        } else if (name == "append") {
+            Channel c;
+            std::atomic<int> sends{0};
+            hostDisconnects = 0;
+            appendError = BLE_HS_ENOMEM;
+            hostSend = [&](os_mbuf* b) { ++sends; delete b; return 0; };
+            require(!c.write({1, 2, 3}), "append error reported success");
+            onHost([] {});
+            require(sends == 0 && liveMbufs == 0 && hostDisconnects == 1,
+                    "append error leaked mbuf or submitted data");
+        } else if (name == "success") {
+            Channel c;
+            int sends = 0;
+            std::vector<uint8_t> input, received;
+            for (int i = 0; i < 20; ++i) input.push_back(uint8_t(i));
+            hostSend = [&](os_mbuf* b) {
+                ++sends;
+                received.insert(received.end(), b->bytes.begin(), b->bytes.end());
+                delete b;
+                return 0;
+            };
+            require(c.write(input) && sends == 3 && received == input && liveMbufs == 0,
+                    "valid fragmented write failed");
         } else if (name == "early") {
             Channel c;
             hostSend = [&](os_mbuf* b) {
