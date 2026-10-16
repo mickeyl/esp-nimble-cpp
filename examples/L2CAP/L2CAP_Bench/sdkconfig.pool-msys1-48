@@ -1,0 +1,2 @@
+# Experimental pool-count control, retaining 256-byte blocks.
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=48

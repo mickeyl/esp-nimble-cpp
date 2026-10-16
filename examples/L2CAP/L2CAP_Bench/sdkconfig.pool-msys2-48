@@ -1,0 +1,2 @@
+# Negative control: the default S3 failure still exhausts msys_1.
+CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=48

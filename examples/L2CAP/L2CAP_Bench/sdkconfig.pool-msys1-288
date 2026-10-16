@@ -1,0 +1,2 @@
+# Experimental resource geometry; not a library or product default.
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_SIZE=288

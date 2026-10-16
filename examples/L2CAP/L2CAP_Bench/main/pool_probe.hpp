@@ -3,3 +3,4 @@
 
 // Flush only outside the timed transfer and native Bluetooth callbacks.
 void benchEmitPoolFailures(void (*emit)(const char*, cJSON*));
+void benchEmitPoolState(void (*emit)(const char*, cJSON*));

@@ -70,16 +70,20 @@ void benchEmitPoolFailures(void (*emit)(const char*, cJSON*)) {
         cJSON_AddNumberToObject(object, "captured", count);
         cJSON_AddNumberToObject(object, "dropped", lost);
         emit("pool-failure-summary", object);
-        os_mempool_info info{};
-        os_mempool* pool = nullptr;
-        while ((pool = os_mempool_info_get_next(pool, &info))) {
-            object = cJSON_CreateObject();
-            cJSON_AddStringToObject(object, "pool", info.omi_name);
-            cJSON_AddNumberToObject(object, "block_size", info.omi_block_size);
-            cJSON_AddNumberToObject(object, "blocks", info.omi_num_blocks);
-            cJSON_AddNumberToObject(object, "free", info.omi_num_free);
-            cJSON_AddNumberToObject(object, "minimum_free", info.omi_min_free);
-            emit("pool-state-after-command", object);
-        }
+        benchEmitPoolState(emit);
+    }
+}
+
+void benchEmitPoolState(void (*emit)(const char*, cJSON*)) {
+    os_mempool_info info{};
+    os_mempool* pool = nullptr;
+    while ((pool = os_mempool_info_get_next(pool, &info))) {
+        auto object = cJSON_CreateObject();
+        cJSON_AddStringToObject(object, "pool", info.omi_name);
+        cJSON_AddNumberToObject(object, "block_size", info.omi_block_size);
+        cJSON_AddNumberToObject(object, "blocks", info.omi_num_blocks);
+        cJSON_AddNumberToObject(object, "free", info.omi_num_free);
+        cJSON_AddNumberToObject(object, "minimum_free", info.omi_min_free);
+        emit("pool-state-after-command", object);
     }
 }

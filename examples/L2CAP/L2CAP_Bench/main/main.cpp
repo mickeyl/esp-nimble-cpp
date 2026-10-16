@@ -2,6 +2,7 @@
 #include "bench_build.hpp"
 #ifdef BENCH_POOL_DIAGNOSTICS
 #include "pool_probe.hpp"
+#include <os/os_mbuf.h>
 #endif
 #include <NimBLEDevice.h>
 #include <algorithm>
@@ -145,6 +146,8 @@ void metadata() {
     auto object = cJSON_CreateObject();
 #ifdef BENCH_POOL_DIAGNOSTICS
     cJSON_AddBoolToObject(object, "pool_diagnostics", true);
+    number(object, "mbuf_header_bytes", sizeof(os_mbuf));
+    number(object, "packet_header_bytes", sizeof(os_mbuf_pkthdr));
 #else
     cJSON_AddBoolToObject(object, "pool_diagnostics", false);
 #endif
@@ -490,6 +493,9 @@ void reflectorTask(void*) {
 }
 
 int command(int argc, char** argv) {
+#ifdef BENCH_POOL_DIAGNOSTICS
+    if (!strcmp(argv[0], "pools")) { benchEmitPoolState(emit); return 0; }
+#endif
     if (!strcmp(argv[0], "run")) {
         const int result = run(argc, argv);
         heapStatus("after-run");
@@ -577,7 +583,11 @@ extern "C" void app_main() {
     xTaskCreate(reflectorTask, "reflect", 6144, nullptr, 4, nullptr);
     esp_console_config_t console{}; console.max_cmdline_args = 8; console.max_cmdline_length = 256;
     ESP_ERROR_CHECK(esp_console_init(&console));
-    for (auto name : {"connect", "disconnect", "run", "status", "params", "role", "listen", "await", "reboot"}) {
+    for (auto name : {"connect", "disconnect", "run", "status", "params", "role", "listen", "await", "reboot"
+#ifdef BENCH_POOL_DIAGNOSTICS
+                     , "pools"
+#endif
+                    }) {
         esp_console_cmd_t cmd{}; cmd.command = name; cmd.help = "L2CAP benchmark command"; cmd.func = command;
         ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
     }
