@@ -85,10 +85,13 @@ void benchEmitPoolState(void (*emit)(const char*, cJSON*)) {
 #if CONFIG_BT_LE_MSYS_INIT_IN_CONTROLLER
     auto object = cJSON_CreateObject();
     cJSON_AddStringToObject(object, "source", "controller-msys");
-    cJSON_AddNumberToObject(object, "blocks", os_msys_count());
-    cJSON_AddNumberToObject(object, "free", os_msys_num_free());
+    // Preserve API returns verbatim. On this controller backend the observed
+    // num_free return can exceed count; these are not a fixed-capacity proof.
+    cJSON_AddNumberToObject(object, "os_msys_count_return", os_msys_count());
+    cJSON_AddNumberToObject(object, "os_msys_num_free_return", os_msys_num_free());
+    cJSON_AddBoolToObject(object, "fixed_capacity_interpretation_supported", false);
     cJSON_AddBoolToObject(object, "per_pool_registry_available", false);
-    emit("pool-state-total", object);
+    emit("controller-msys-counters", object);
 #else
     os_mempool_info info{};
     os_mempool* pool = nullptr;
