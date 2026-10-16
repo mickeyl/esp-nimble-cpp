@@ -116,3 +116,63 @@ identifies a resource failure, not the exact limiting pool; it is retained as a
 failed case and is not claimed fixed here. Use 4096-byte payloads for the bounded
 baseline. The parser's maximum frame size is not a guarantee that the default
 host/controller buffers can sustain every transfer geometry.
+
+## Experimental resource investigation (branch only)
+
+This branch adds optional pool diagnostics and three isolated SDK-config
+fragments. None changes the normal defaults or any production ECOS pin.
+Configure a separate build with `-D BENCH_POOL_DIAGNOSTICS=ON` and use `pools`
+on its serial console. Metadata declares whether allocation failures are
+actually observed on that target.
+
+On S3, a linker wrapper observes failed `os_memblock_get` calls. Successful
+allocations do not log, lock or read a timestamp. A bounded 16-record buffer
+copies pool name/count/size and a local timestamp on failures, and counts
+overflow explicitly. Events are emitted after a console command returns,
+outside the measured transfer. The full native pool registry is available
+through `pools`; `free_after_failure` is a snapshot after the allocator returned,
+not an atomic reconstruction of the allocation itself. Diagnostic builds are
+for attribution, not throughput comparisons.
+
+The pinned S31 controller uses its own `r_os_*` backend and does not expose the
+same pool registry. The host allocation hook does not cover it. Its metadata
+therefore sets `pool_allocation_failure_probe=false`. `pools` retains the raw
+controller `os_msys_count` / `os_msys_num_free` API returns, explicitly without
+interpreting them as fixed capacity: an idle observation returned 2 and 4.
+Absence of S31 pool-failure events is not proof of absence of resource pressure.
+
+### Measured S3 result
+
+At 15 ms, 2M/2M PHY, 251-byte DLE and negotiated SDU MTU 5000 against the
+unchanged S31 peer:
+
+| S3 profile | 5000-byte native SDU result |
+|---|---|
+| Default 24 × 256-byte MSYS1 | Fails with `ENOMEM`; failed pool is `msys_1`, free=0. MSYS2 remains unused. |
+| Only MSYS2 count raised 24 → 48 | Same `msys_1` failure; all 48 MSYS2 blocks remain free. |
+| Only MSYS1 count raised 24 → 48 | Maximum request with a small reply passes across two connections. |
+| Only MSYS1 block size raised 256 → 288 | Full-size echo passes across three connections and the inverse GAP-role check. |
+| Return to the default image | Same `msys_1` failure recurs. |
+| 288-byte profile without pool instrumentation | 4-KiB and maximum-size echo pass across three connections. |
+
+The clean run contains 192 measured echo exchanges plus 12 warmups, half at
+4996-byte payloads plus framing. The earlier diagnostic echo and inverse-role
+checks are separate evidence. A 4-KiB default control also passes.
+
+Native source explains why MSYS2 does not rescue this path: packet creation
+starts with `os_msys_get_pkthdr(0, ...)`, selecting MSYS1, and append operations
+extend the chain from that same pool. There is no retry using MSYS2 on exhaustion.
+On S3, a full 248-byte peer PDU plus the 16-byte mbuf header, 8-byte packet header
+and 9-byte reserved leading space exceeds a 256-byte block. Larger blocks can
+avoid that second allocation; more blocks can instead absorb the extra chain.
+
+Use the optional `sdkconfig.pool-msys1-288`, `sdkconfig.pool-msys1-48` and
+`sdkconfig.pool-msys2-48` fragments only for these experiments. The first adds
+768 bytes of pool backing storage; doubling the count adds 6144 bytes.
+Changing MSYS1 block size also changes the advertised local MPS in this SDK
+(248 → 280 here). The S3's outgoing peer MPS stays 248 with the unchanged peer,
+so the large-request/small-reply check isolates the sender resource change.
+This is not a general 288-byte recommendation for arbitrary or identically
+modified peers. Continuous streaming, Apple peers and multiple channels remain
+separate acceptance cases; no native partial-SDU retry or application pacing
+was introduced.
