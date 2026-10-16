@@ -3,8 +3,10 @@
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <os/os_mempool.h>
+#include <os/os_mbuf.h>
 #include <cstdint>
 
+#if !CONFIG_BT_LE_MSYS_INIT_IN_CONTROLLER
 namespace {
 struct Failure {
     int64_t atUs;
@@ -73,8 +75,21 @@ void benchEmitPoolFailures(void (*emit)(const char*, cJSON*)) {
         benchEmitPoolState(emit);
     }
 }
+#else
+// S31 routes native allocations through controller-owned r_os_* functions.
+// The host allocator hook and pool registry do not cover that backend.
+void benchEmitPoolFailures(void (*)(const char*, cJSON*)) {}
+#endif
 
 void benchEmitPoolState(void (*emit)(const char*, cJSON*)) {
+#if CONFIG_BT_LE_MSYS_INIT_IN_CONTROLLER
+    auto object = cJSON_CreateObject();
+    cJSON_AddStringToObject(object, "source", "controller-msys");
+    cJSON_AddNumberToObject(object, "blocks", os_msys_count());
+    cJSON_AddNumberToObject(object, "free", os_msys_num_free());
+    cJSON_AddBoolToObject(object, "per_pool_registry_available", false);
+    emit("pool-state-total", object);
+#else
     os_mempool_info info{};
     os_mempool* pool = nullptr;
     while ((pool = os_mempool_info_get_next(pool, &info))) {
@@ -86,4 +101,5 @@ void benchEmitPoolState(void (*emit)(const char*, cJSON*)) {
         cJSON_AddNumberToObject(object, "minimum_free", info.omi_min_free);
         emit("pool-state-after-command", object);
     }
+#endif
 }

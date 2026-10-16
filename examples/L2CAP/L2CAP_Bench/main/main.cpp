@@ -146,8 +146,14 @@ void metadata() {
     auto object = cJSON_CreateObject();
 #ifdef BENCH_POOL_DIAGNOSTICS
     cJSON_AddBoolToObject(object, "pool_diagnostics", true);
+#if CONFIG_BT_LE_MSYS_INIT_IN_CONTROLLER
+    cJSON_AddBoolToObject(object, "pool_allocation_failure_probe", false);
+#else
+    cJSON_AddBoolToObject(object, "pool_allocation_failure_probe", true);
+#endif
     number(object, "mbuf_header_bytes", sizeof(os_mbuf));
     number(object, "packet_header_bytes", sizeof(os_mbuf_pkthdr));
+    number(object, "configured_rx_mps", MYNEWT_VAL(BLE_L2CAP_COC_MPS));
 #else
     cJSON_AddBoolToObject(object, "pool_diagnostics", false);
 #endif

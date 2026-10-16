@@ -8,5 +8,7 @@ option(BENCH_POOL_DIAGNOSTICS "Capture failed native pool allocations (experimen
 if(BENCH_POOL_DIAGNOSTICS)
     target_sources(${COMPONENT_LIB} PRIVATE pool_probe.cpp)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE BENCH_POOL_DIAGNOSTICS=1)
-    idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=os_memblock_get" APPEND)
+    if(NOT CONFIG_BT_LE_MSYS_INIT_IN_CONTROLLER)
+        idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=os_memblock_get" APPEND)
+    endif()
 endif()
