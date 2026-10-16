@@ -360,7 +360,12 @@ bool NimBLEL2CAPChannel::write(const std::vector<uint8_t>& bytes) {
         if (!isConnected()) { return false; }
         const auto length = std::min<size_t>(width, bytes.end() - start);
         auto end = start + length;
-        if (writeFragment(start, end) != 0) { disconnect(); return false; }
+        const int rc = writeFragment(start, end);
+        if (rc != 0) {
+            NIMBLE_LOGE(LOG_TAG, "TX failure rc=%d offset=%u length=%u total=%u", rc,
+                        unsigned(start - bytes.begin()), unsigned(length), unsigned(bytes.size()));
+            disconnect(); return false;
+        }
         start = end;
     }
     return true;

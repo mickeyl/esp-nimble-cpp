@@ -1,5 +1,8 @@
 #include "bench_protocol.hpp"
 #include "bench_build.hpp"
+#ifdef BENCH_POOL_DIAGNOSTICS
+#include "pool_probe.hpp"
+#endif
 #include <NimBLEDevice.h>
 #include <algorithm>
 #include <atomic>
@@ -140,6 +143,11 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 
 void metadata() {
     auto object = cJSON_CreateObject();
+#ifdef BENCH_POOL_DIAGNOSTICS
+    cJSON_AddBoolToObject(object, "pool_diagnostics", true);
+#else
+    cJSON_AddBoolToObject(object, "pool_diagnostics", false);
+#endif
     cJSON_AddStringToObject(object, "target", CONFIG_IDF_TARGET);
     number(object, "bench_protocol", bench::version);
     cJSON_AddStringToObject(object, "gap_role", serverMode.load() ? "peripheral" : "central");
@@ -582,6 +590,9 @@ extern "C" void app_main() {
         int result = 0;
         const auto err = esp_console_run(line, &result);
         if (err != ESP_OK) error(esp_err_to_name(err));
+#ifdef BENCH_POOL_DIAGNOSTICS
+        benchEmitPoolFailures(emit);
+#endif
         auto object = cJSON_CreateObject(); number(object, "code", err == ESP_OK ? result : int(err)); emit("command-end", object);
     }
 }
