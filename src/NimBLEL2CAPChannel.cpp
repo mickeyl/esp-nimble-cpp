@@ -277,24 +277,28 @@ NimBLEL2CAPChannel::~NimBLEL2CAPChannel() {
 
 bool NimBLEL2CAPChannel::setupMemPool() {
     const size_t buf_blocks = L2CAP_SDU_BUFFER_COUNT;
+    // os_mbuf_pool_init subtracts the mbuf header; get_pkthdr also reserves
+    // its packet header. Include both so one block holds one full-MTU SDU.
+    const size_t blockSize = size_t(mtu) + sizeof(os_mbuf) + sizeof(os_mbuf_pkthdr);
+    if (blockSize > UINT16_MAX) { return false; }
     NIMBLE_LOGD(LOG_TAG, "Allocating %d L2CAP SDU buffers of %d bytes", buf_blocks, mtu);
 
     memset(&_coc_mempool, 0, sizeof(_coc_mempool));
     memset(&_coc_mbuf_pool, 0, sizeof(_coc_mbuf_pool));
 
-    _coc_memory = malloc(OS_MEMPOOL_SIZE(buf_blocks, mtu) * sizeof(os_membuf_t));
+    _coc_memory = malloc(OS_MEMPOOL_SIZE(buf_blocks, blockSize) * sizeof(os_membuf_t));
     if (_coc_memory == 0) {
         NIMBLE_LOGE(LOG_TAG, "Can't allocate _coc_memory: %d", errno);
         return false;
     }
 
-    auto rc = os_mempool_init(&_coc_mempool, buf_blocks, mtu, _coc_memory, "appbuf");
+    auto rc = os_mempool_init(&_coc_mempool, buf_blocks, blockSize, _coc_memory, "appbuf");
     if (rc != 0) {
         NIMBLE_LOGE(LOG_TAG, "Can't os_mempool_init: %d", rc);
         return false;
     }
 
-    auto rc2 = os_mbuf_pool_init(&_coc_mbuf_pool, &_coc_mempool, mtu, buf_blocks);
+    auto rc2 = os_mbuf_pool_init(&_coc_mbuf_pool, &_coc_mempool, blockSize, buf_blocks);
     if (rc2 != 0) {
         NIMBLE_LOGE(LOG_TAG, "Can't os_mbuf_pool_init: %d", rc2);
         return false;

@@ -76,7 +76,21 @@ struct Channel : NimBLEL2CAPChannel {
 int main(int argc, char** argv) {
     try {
         const std::string name = argc > 1 ? argv[1] : "errors";
-        if (name == "lifecycle") {
+        if (name == "full_mtu") {
+            hostNegotiatedMtu = 64;
+            Channel c;
+            std::vector<uint8_t> delivered;
+            int sends = 0;
+            hostSend = [&](os_mbuf* b) {
+                ++sends;
+                delivered.insert(delivered.end(), b->bytes.begin(), b->bytes.end());
+                delete b;
+                return 0;
+            };
+            const std::vector<uint8_t> input(64, 0x55);
+            require(c.write(input) && sends == 1 && delivered == input,
+                    "full local-MTU SDU did not fit in one configured mbuf block");
+        } else if (name == "lifecycle") {
             nimble_port_get_dflt_eventq();
             const int baselineQueues = hostQueueCount.load();
             for (int cycle = 0; cycle < 30; ++cycle) {

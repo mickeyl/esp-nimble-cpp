@@ -84,10 +84,12 @@ inline uint32_t ble_npl_time_ms_to_ticks32(uint32_t ms) {
 struct os_mempool {
     const char* name = nullptr;
 };
-struct os_mbuf_pool {};
+struct os_mbuf_pool { size_t payloadCapacity = 0; };
+struct os_mbuf_pkthdr { uint32_t length; };
 using os_membuf_t = uint8_t;
 struct os_mbuf {
     std::vector<uint8_t> bytes;
+    size_t capacity = SIZE_MAX;
 };
 #define OS_MEMPOOL_SIZE(n, s) ((n) * (s))
 #define OS_MBUF_PKTLEN(m)     ((m)->bytes.size())
@@ -95,14 +97,20 @@ inline int os_mempool_init(os_mempool* p, size_t, size_t, void*, const char* n) 
     p->name = n;
     return 0;
 }
-inline int os_mbuf_pool_init(os_mbuf_pool*, os_mempool*, size_t, size_t) {
+inline int os_mbuf_pool_init(os_mbuf_pool* pool, os_mempool*, size_t blockSize, size_t) {
+    pool->payloadCapacity = blockSize - sizeof(os_mbuf) - sizeof(os_mbuf_pkthdr);
     return 0;
 }
 inline void     os_mempool_unregister(os_mempool*) {}
-inline os_mbuf* os_mbuf_get_pkthdr(os_mbuf_pool*, int) {
-    return new os_mbuf;
+inline os_mbuf* os_mbuf_get_pkthdr(os_mbuf_pool* pool, int) {
+    auto* b = new os_mbuf;
+    b->capacity = pool->payloadCapacity;
+    return b;
 }
 inline int os_mbuf_append(os_mbuf* b, const void* p, size_t n) {
+    // Test the per-block contract: a full SDU must not need a second block.
+    // Native NimBLE can chain blocks instead; this stub deliberately refuses it.
+    if (n > b->capacity - b->bytes.size()) return 6; // BLE_HS_ENOMEM
     auto a = (const uint8_t*)p;
     b->bytes.insert(b->bytes.end(), a, a + n);
     return 0;
@@ -120,6 +128,7 @@ constexpr int      BLE_HS_EAGAIN = 1, BLE_HS_ENOMEM = 6, BLE_HS_ENOTCONN = 7, BL
                    BLE_HS_ETIMEOUT         = 13;
 constexpr uint16_t BLE_HS_CONN_HANDLE_NONE = 0xffff;
 struct ble_l2cap_chan {};
+inline uint16_t hostNegotiatedMtu = 8;
 struct ble_l2cap_chan_info {
     uint16_t peer_coc_mtu = 8, our_coc_mtu = 8, peer_l2cap_mtu = 8, our_l2cap_mtu = 8, scid = 1, dcid = 2, psm = 129;
 };
@@ -143,6 +152,7 @@ inline std::atomic<int>             hostDisconnects{0};
 inline int                          ble_l2cap_get_chan_info(ble_l2cap_chan* c, ble_l2cap_chan_info* i) {
     if (!c) return BLE_HS_ENOTCONN;
     *i = {};
+    i->peer_coc_mtu = i->our_coc_mtu = hostNegotiatedMtu;
     return 0;
 }
 inline uint16_t ble_l2cap_get_conn_handle(ble_l2cap_chan*) {
@@ -263,5 +273,7 @@ inline QueueHandle_t nimble_port_get_dflt_eventq() {
     return q;
 }
 inline void ble_npl_eventq_put(QueueHandle_t q, ble_npl_event* e) {
-    assert(xQueueSend(q, &e, 0) == pdTRUE);
+    const auto queued = xQueueSend(q, &e, 0);
+    assert(queued == pdTRUE);
+    (void)queued;
 }

@@ -12,6 +12,14 @@ Clang, CMake and a C++17 compiler are required. Address builds also enable undef
 
 The fake radio does not validate ESP32 scheduling, RF behavior, controller credits or memory-pool sizing. Real-device transfer and disconnect tests remain necessary. Timeouts deliberately exercise the production two-second deadline. The lifecycle cases repeatedly create and destroy channels and verify that the shared callback task and queue are released after the last channel.
 
+The `full_mtu` regression sends a full negotiated SDU through the production
+write path. Its allocator stub subtracts mbuf and packet-header overhead and
+refuses block chaining, checking the one-full-SDU-per-block contract. It fails
+when pool blocks contain only MTU bytes. This models local allocation capacity;
+it does not measure native pool exhaustion or controller/MSYS headroom. The
+event-queue stub enqueues outside `assert`, and geometry assertions remain
+enabled in Release builds.
+
 ## ESP-IDF TX diagnostics
 
 `CONFIG_NIMBLE_CPP_L2CAP_TX_DIAGNOSTICS` (default off) reads private channel
